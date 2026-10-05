@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# WhatsApp session (VERY IMPORTANT — never commit)
+auth_info_baileys/
+
+# Uploads (temp files)
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
