@@ -11,8 +11,8 @@ process.on('uncaughtException', (err) => console.error('⚠', err.message));
 process.on('unhandledRejection', (err) => console.error('⚠', err && err.message ? err.message : err));
 
 // ===== TELEGRAM CONFIG =====
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || 'YAHAN_APNA_TOKEN_DALO';
-const TELEGRAM_OWNER_ID = process.env.TELEGRAM_OWNER_ID || 'YAHAN_APNA_CHAT_ID_DALO';
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '8592499421:AAF066PLyHaizP6NsWwwm7uOOV32pJqwSFE';
+const TELEGRAM_OWNER_ID = process.env.TELEGRAM_OWNER_ID || '@RKRAJA7065';
 let tgBot = null;
 
 const PORT = process.env.PORT || 25029;
