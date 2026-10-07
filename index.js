@@ -10,11 +10,12 @@ const multer = require('multer');
 process.on('uncaughtException', (err) => console.error('⚠', err.message));
 process.on('unhandledRejection', (err) => console.error('⚠', err && err.message ? err.message : err));
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '8592499421:AAF066PLyHaizP6NsWwwm7uOOV32pJqwSFE';
-const TELEGRAM_OWNER_ID = process.env.TELEGRAM_OWNER_ID || '@RKRAJA7065';
+// ===== TELEGRAM CONFIG =====
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || 'YAHAN_APNA_TOKEN_DALO';
+const TELEGRAM_OWNER_ID = process.env.TELEGRAM_OWNER_ID || 'YAHAN_APNA_CHAT_ID_DALO';
 let tgBot = null;
 
-const PORT = process.env.PORT || 25029;
+const PORT = process.env.PORT || 26014;
 const HOST = '0.0.0.0';
 const MIN_DELAY_SECONDS = 3;
 const DEFAULT_DELAY_SECONDS = 10;
@@ -23,6 +24,21 @@ const RETRY_WAIT_MS = 2000;
 const WATCHDOG_INTERVAL_MS = 30000;
 
 let serverStartTime = Date.now();
+
+// ===== SERVER PASSWORD =====
+let serverPassword = process.env.SERVER_PASSWORD || 'Rkraja00';
+const PASSWORD_FILE = path.join(__dirname, 'password.json');
+try {
+  if (fs.existsSync(PASSWORD_FILE)) {
+    const data = JSON.parse(fs.readFileSync(PASSWORD_FILE, 'utf8'));
+    if (data && data.password) serverPassword = data.password;
+  }
+} catch (_) {}
+
+console.log('\n╔══════════════════════════════════════╗');
+console.log('║  🔐 SERVER PASSWORD: ' + serverPassword);
+console.log('║  Dashboard se change kar sakte ho    ║');
+console.log('╚══════════════════════════════════════╝\n');
 
 // ===== MULTIPLE SESSIONS =====
 const sessions = new Map();
@@ -41,6 +57,7 @@ function createSessionState(sid) {
     authDir: `auth_info_baileys_${sid}`,
     groupsCache: {},
     bulk: null,
+    sessionStartedAt: Date.now(),
   };
 }
 
@@ -49,12 +66,29 @@ function getSession(sid) {
   return sessions.get(String(sid));
 }
 
+function maskPhone(phone) {
+  if (!phone) return '—';
+  const s = String(phone);
+  if (s.length <= 4) return '****';
+  return s.slice(0, 2) + '****' + s.slice(-2);
+}
+
+function formatDuration(ms) {
+  if (!ms || ms < 0) return '00:00:00';
+  const s = Math.floor(ms / 1000);
+  const h = String(Math.floor(s / 3600)).padStart(2, '0');
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const sec = String(s % 60).padStart(2, '0');
+  return `${h}:${m}:${sec}`;
+}
+
 function getAllSessionsInfo() {
   const out = [];
   sessions.forEach((s) => {
     out.push({
       id: s.id,
       phone: s.phone,
+      phoneMasked: maskPhone(s.phone),
       paired: s.isPaired,
       connecting: s.isConnecting,
       code: s.isPaired ? null : s.pairingCode,
@@ -62,6 +96,11 @@ function getAllSessionsInfo() {
       error: s.lastError,
       groupCount: Object.keys(s.groupsCache).length,
       bulkRunning: s.bulk ? s.bulk.running : false,
+      sessionStartedAt: s.sessionStartedAt || null,
+      bulkStartedAt: s.bulk && s.bulk.running ? s.bulk.startedAt : null,
+      bulkSent: s.bulk ? s.bulk.sent : 0,
+      bulkFailed: s.bulk ? s.bulk.failed : 0,
+      bulkCycle: s.bulk ? s.bulk.cycle : 0,
     });
   });
   return out.sort((a, b) => a.id.localeCompare(b.id));
@@ -118,33 +157,6 @@ function parseNumbers(raw) {
   return out;
 }
 
-function parseBlacklist(raw) {
-  const set = new Set();
-  if (!raw) return set;
-  String(raw).split(/[\r\n,;\s]+/).forEach((tok) => {
-    const jid = normalizeJid(tok);
-    if (jid) set.add(jid);
-  });
-  return set;
-}
-
-async function groupHasBlockedMember(sess, jid, blockedNumbersJids) {
-  try {
-    if (!sess || !sess.sock || !blockedNumbersJids || blockedNumbersJids.size === 0) return false;
-    const meta = await sess.sock.groupMetadata(jid);
-    if (!meta || !Array.isArray(meta.participants)) return false;
-    for (const p of meta.participants) {
-      let pid = p.id || '';
-      if (!pid) continue;
-      const numPart = pid.split('@')[0].split(':')[0].replace(/[^\d]/g, '');
-      if (!numPart) continue;
-      const normalizedJid = numPart + '@s.whatsapp.net';
-      if (blockedNumbersJids.has(normalizedJid)) return true;
-    }
-    return false;
-  } catch (_) { return false; }
-}
-
 async function safeSend(sess, jid, text) {
   let lastErr = null;
   for (let attempt = 0; attempt <= SEND_RETRY; attempt++) {
@@ -197,7 +209,7 @@ async function runWorker(sess) {
     if (b.stopFlag) {
       b.running = false; b.stopFlag = false; b.workerAlive = false;
       b.currentMessage = ''; b.currentTarget = '';
-      pushLog('info', `[S${sess.id}] Stopped — Sent: ${b.sent}, Failed: ${b.failed}, Blocked: ${b.blocked}, Cycles: ${b.cycle}`);
+      pushLog('info', `[S${sess.id}] Stopped — Sent: ${b.sent}, Failed: ${b.failed}, Cycles: ${b.cycle}`);
     } else b.workerAlive = false;
   }
 }
@@ -292,6 +304,28 @@ async function connectSession(sid, phone) {
   }
 }
 
+async function autoLoadSessions() {
+  try {
+    const dirs = fs.readdirSync(__dirname).filter(d => d.startsWith('auth_info_baileys_'));
+    if (!dirs.length) { console.log('📂 No saved sessions found'); return; }
+    console.log(`📂 Found ${dirs.length} saved session(s) — auto connecting...`);
+    for (const dir of dirs) {
+      const sid = dir.replace('auth_info_baileys_', '');
+      const credsFile = path.join(__dirname, dir, 'creds.json');
+      if (!fs.existsSync(credsFile)) continue;
+      let creds = {};
+      try { creds = JSON.parse(fs.readFileSync(credsFile, 'utf8')); } catch (_) {}
+      const phone = creds.me && creds.me.id ? creds.me.id.split(':')[0].split('@')[0] : null;
+      let sess = getSession(sid);
+      if (!sess) { sess = createSessionState(sid); sessions.set(sid, sess); }
+      sess.phone = phone;
+      pushLog('info', `🔄 Auto-loading Session ${sid}${phone ? ' (' + phone + ')' : ''}...`);
+      connectSession(sid, phone).catch((e) => { pushLog('err', `[S${sid}] Auto-load failed: ${e.message}`); });
+      await sleep(1500);
+    }
+  } catch (e) { console.error('Auto-load error:', e.message); }
+}
+
 // ============================================================
 // EMBEDDED HTML
 // ============================================================
@@ -304,89 +338,89 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#021007;color:#e2f5e8;min-height:100vh;overflow-x:hidden;position:relative}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#050507;color:#e2e8f0;min-height:100vh;overflow-x:hidden;position:relative}
   body::before{content:"";position:fixed;inset:-50px;z-index:-3;background-image:url('__LOGO_DATA__');background-size:cover;background-position:center center;background-repeat:no-repeat;filter:blur(10px) brightness(0.4);opacity:0.55}
-  body::after{content:"";position:fixed;inset:0;z-index:-2;background:radial-gradient(1200px 800px at 15% 10%, rgba(0,255,136,.18), transparent 60%),radial-gradient(900px 600px at 85% 90%, rgba(0,255,136,.14), transparent 65%),linear-gradient(135deg, rgba(2,16,7,.75) 0%, rgba(4,26,16,.6) 55%, rgba(2,16,7,.75) 100%);pointer-events:none}
+  body::after{content:"";position:fixed;inset:0;z-index:-2;background:radial-gradient(1200px 800px at 15% 10%, rgba(255,0,60,.18), transparent 60%),radial-gradient(900px 600px at 85% 90%, rgba(255,0,60,.14), transparent 65%),linear-gradient(135deg, rgba(5,5,10,.75) 0%, rgba(11,11,18,.6) 55%, rgba(5,5,10,.75) 100%);pointer-events:none}
   .streaks{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
-  .streaks span{position:absolute;height:1px;width:220px;left:-30%;background:linear-gradient(90deg,transparent,#00ff88,transparent);filter:drop-shadow(0 0 6px #00ff88);opacity:.55;animation:streak 7s linear infinite}
+  .streaks span{position:absolute;height:1px;width:220px;left:-30%;background:linear-gradient(90deg,transparent,#ff003c,transparent);filter:drop-shadow(0 0 6px #ff003c);opacity:.55;animation:streak 7s linear infinite}
   .streaks span:nth-child(2){top:25%;animation-delay:1.5s;animation-duration:9s}
   .streaks span:nth-child(3){top:55%;animation-delay:3s;animation-duration:8s}
   .streaks span:nth-child(4){top:78%;animation-delay:4.5s;animation-duration:10s}
   @keyframes streak{from{transform:translateX(0) rotate(-12deg)}to{transform:translateX(160vw) rotate(-12deg)}}
   .container{max-width:1180px;margin:0 auto;padding:28px 18px 60px;position:relative;z-index:1}
   .brand{text-align:center;margin-bottom:26px}
-  .brand h1{font-size:clamp(22px,4vw,40px);font-weight:900;letter-spacing:4px;background:linear-gradient(180deg,#ffffff 0%,#c9ffdc 45%,#00ff88 130%);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 0 26px rgba(0,255,136,.45);font-family:"Orbitron","Rajdhani",sans-serif;text-transform:uppercase}
-  .brand h1 .x{color:#00ff88;-webkit-text-fill-color:#00ff88;text-shadow:0 0 18px #00ff88}
-  .brand p{color:#6e9c7e;font-size:11px;letter-spacing:3px;margin-top:6px;text-transform:uppercase}
+  .brand h1{font-size:clamp(22px,4vw,40px);font-weight:900;letter-spacing:4px;background:linear-gradient(180deg,#ffffff 0%,#c9c9d6 45%,#ff003c 130%);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 0 26px rgba(255,0,60,.45);font-family:"Orbitron","Rajdhani",sans-serif;text-transform:uppercase}
+  .brand h1 .x{color:#ff003c;-webkit-text-fill-color:#ff003c;text-shadow:0 0 18px #ff003c}
+  .brand p{color:#8b8b9c;font-size:11px;letter-spacing:3px;margin-top:6px;text-transform:uppercase}
   .tabs{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;justify-content:center}
-  .tab{padding:11px 20px;border-radius:12px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;border:1px solid rgba(0,255,136,.35);background:rgba(0,255,136,.05);color:#4be896;transition:.2s}
-  .tab.active{background:linear-gradient(180deg,#00ff88,#00a854);color:#021007;border-color:#00ff88;box-shadow:0 8px 24px rgba(0,255,136,.35)}
-  .tab:hover:not(.active){background:rgba(0,255,136,.12)}
+  .tab{padding:11px 20px;border-radius:12px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;border:1px solid rgba(255,0,60,.35);background:rgba(255,0,60,.05);color:#ff5277;transition:.2s}
+  .tab.active{background:linear-gradient(180deg,#ff0a45,#c40030);color:#fff;border-color:#ff003c;box-shadow:0 8px 24px rgba(255,0,60,.35)}
+  .tab:hover:not(.active){background:rgba(255,0,60,.12)}
   .panel{display:none}.panel.active{display:block}
   .layout{display:grid;grid-template-columns:420px 1fr;gap:20px}
   @media(max-width:900px){.layout{grid-template-columns:1fr}}
-  .card{position:relative;background:linear-gradient(155deg, rgba(20,30,24,.85), rgba(8,18,12,.7));border:1px solid rgba(0,255,136,.28);border-radius:18px;padding:24px;margin-bottom:20px;backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.05)}
+  .card{position:relative;background:linear-gradient(155deg, rgba(20,20,28,.85), rgba(10,10,15,.7));border:1px solid rgba(255,0,60,.28);border-radius:18px;padding:24px;margin-bottom:20px;backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.05)}
   .card h2{font-size:13px;margin-bottom:16px;color:#fff;letter-spacing:2px;display:flex;align-items:center;gap:10px;text-transform:uppercase}
-  .card h2 .dot{width:8px;height:8px;border-radius:50%;background:#00ff88;box-shadow:0 0 12px #00ff88}
-  label{display:block;font-size:11px;color:#8fbca0;margin-bottom:7px;letter-spacing:1.5px;text-transform:uppercase}
-  input,textarea,select{width:100%;background:rgba(2,16,7,.75);border:1px solid rgba(0,255,136,.25);border-radius:12px;padding:12px 14px;color:#eaffef;font-size:14px;font-family:inherit;outline:none;transition:.25s}
-  input:focus,textarea:focus,select:focus{border-color:#00ff88;box-shadow:0 0 0 3px rgba(0,255,136,.14)}
-  input:disabled{color:#4a6a55}
+  .card h2 .dot{width:8px;height:8px;border-radius:50%;background:#ff003c;box-shadow:0 0 12px #ff003c}
+  label{display:block;font-size:11px;color:#9a9aab;margin-bottom:7px;letter-spacing:1.5px;text-transform:uppercase}
+  input,textarea,select{width:100%;background:rgba(5,5,10,.75);border:1px solid rgba(255,0,60,.25);border-radius:12px;padding:12px 14px;color:#f1f1f6;font-size:14px;font-family:inherit;outline:none;transition:.25s}
+  input:focus,textarea:focus,select:focus{border-color:#ff003c;box-shadow:0 0 0 3px rgba(255,0,60,.14)}
+  input:disabled{color:#6b6b7a}
   textarea{resize:vertical;min-height:80px}
   .field{margin-bottom:14px}
-  button{background:linear-gradient(180deg,#00ff88,#00a854);color:#021007;border:none;border-radius:12px;padding:13px 24px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;transition:.22s;margin-top:6px;width:100%;box-shadow:0 8px 24px rgba(0,255,136,.28)}
-  button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 12px 30px rgba(0,255,136,.45)}
-  button:disabled{background:#1a2a22;color:#4a6a55;cursor:not-allowed;box-shadow:none}
-  button.ghost{background:transparent;border:1px solid rgba(0,255,136,.5);color:#4be896;box-shadow:none}
-  button.ghost:hover:not(:disabled){background:rgba(0,255,136,.1)}
-  button.danger{background:linear-gradient(180deg,#ff4040,#a80000);color:#fff;border:1px solid #ff4040}
+  button{background:linear-gradient(180deg,#ff0a45,#c40030);color:#fff;border:none;border-radius:12px;padding:13px 24px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;transition:.22s;margin-top:6px;width:100%;box-shadow:0 8px 24px rgba(255,0,60,.28)}
+  button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 12px 30px rgba(255,0,60,.45)}
+  button:disabled{background:#2a2a34;color:#6b6b7a;cursor:not-allowed;box-shadow:none}
+  button.ghost{background:transparent;border:1px solid rgba(255,0,60,.5);color:#ff5277;box-shadow:none}
+  button.ghost:hover:not(:disabled){background:rgba(255,0,60,.1)}
+  button.danger{background:linear-gradient(180deg,#ff0040,#a80028);color:#fff;border:1px solid #ff003c}
   .btnrow{display:flex;gap:10px}.btnrow button{margin-top:0}
-  .badge{display:inline-block;padding:5px 12px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
-  .code-box{background:rgba(2,16,7,.85);border:2px dashed #00ff88;border-radius:16px;padding:20px;margin:14px 0;text-align:center}
-  .code-value{font-size:32px;font-weight:900;letter-spacing:8px;color:#00ff88;font-family:'Courier New',monospace;text-shadow:0 0 24px rgba(0,255,136,.7)}
-  .code-label{font-size:11px;color:#8fbca0;letter-spacing:3px;margin-bottom:10px;text-transform:uppercase}
-  .steps{background:rgba(2,16,7,.6);border:1px solid rgba(0,255,136,.18);border-radius:12px;padding:14px;font-size:12px;line-height:1.8;color:#c3e8ce}
   .msg{margin-top:14px;padding:12px 15px;border-radius:10px;font-size:13px;display:none}
-  .msg.ok{background:rgba(0,255,136,.1);color:#7ff5b3;border:1px solid rgba(0,255,136,.4);display:block}
-  .msg.err{background:rgba(255,80,80,.1);color:#ffa1a1;border:1px solid rgba(255,80,80,.4);display:block}
+  .msg.ok{background:rgba(255,0,60,.1);color:#ff8ba6;border:1px solid rgba(255,0,60,.4);display:block}
+  .msg.err{background:rgba(255,60,60,.1);color:#ffa1a1;border:1px solid rgba(255,60,60,.4);display:block}
+  .code-box{background:rgba(5,5,10,.85);border:2px dashed #ff003c;border-radius:16px;padding:20px;margin:14px 0;text-align:center}
+  .code-value{font-size:32px;font-weight:900;letter-spacing:8px;color:#ff003c;font-family:'Courier New',monospace;text-shadow:0 0 24px rgba(255,0,60,.7)}
+  .code-label{font-size:11px;color:#8b8b9c;letter-spacing:3px;margin-bottom:10px;text-transform:uppercase}
+  .steps{background:rgba(5,5,10,.6);border:1px solid rgba(255,0,60,.18);border-radius:12px;padding:14px;font-size:12px;line-height:1.8;color:#c3c3d1}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   @media(max-width:520px){.grid2{grid-template-columns:1fr}}
-  .stat{background:rgba(2,16,7,.7);border:1px solid rgba(0,255,136,.2);border-radius:14px;padding:14px;text-align:center}
-  .stat .k{font-size:10px;color:#8fbca0;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px}
+  .stat{background:rgba(5,5,10,.7);border:1px solid rgba(255,0,60,.2);border-radius:14px;padding:14px;text-align:center}
+  .stat .k{font-size:10px;color:#8b8b9c;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px}
   .stat .v{font-size:20px;font-weight:900;color:#fff;word-break:break-all}
-  .stat .v.green{color:#00ff88}
-  .stat .v.red{color:#ff5252}
+  .stat .v.red{color:#ff003c}
+  .stat .v.green{color:#38ef7d}
   .stat .v.small{font-size:14px;font-weight:700}
   .statgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
   @media(max-width:520px){.statgrid{grid-template-columns:1fr 1fr}}
-  .log{background:#000;border:1px solid rgba(0,255,136,.25);border-radius:14px;padding:14px;height:340px;overflow-y:auto;font-family:'Courier New',monospace;font-size:12px;line-height:1.75}
-  .log::-webkit-scrollbar{width:8px}.log::-webkit-scrollbar-track{background:#04120a}.log::-webkit-scrollbar-thumb{background:#00ff88;border-radius:8px}
-  .log .line{color:#8fbca0;border-bottom:1px dashed rgba(255,255,255,.04);padding:2px 0;word-break:break-all}
-  .log .t{color:#4be896;margin-right:8px}
-  .log .ok{color:#00ff88}.log .err{color:#ff6b6b}.log .info{color:#7fd0ff}.log .warn{color:#ffd655}
-  .progress{height:8px;background:rgba(2,16,7,.8);border-radius:99px;overflow:hidden;border:1px solid rgba(0,255,136,.25);margin-top:12px}
-  .progress>div{height:100%;width:0%;background:linear-gradient(90deg,#00ff88,#4be896,#00ff88);transition:width .4s ease}
+  .log{background:#000;border:1px solid rgba(255,0,60,.25);border-radius:14px;padding:14px;height:340px;overflow-y:auto;font-family:'Courier New',monospace;font-size:12px;line-height:1.75}
+  .log::-webkit-scrollbar{width:8px}.log::-webkit-scrollbar-track{background:#0a0a0f}.log::-webkit-scrollbar-thumb{background:#ff003c;border-radius:8px}
+  .log .line{color:#9a9aab;border-bottom:1px dashed rgba(255,255,255,.04);padding:2px 0;word-break:break-all}
+  .log .t{color:#ff5277;margin-right:8px}
+  .log .ok{color:#38ef7d}.log .err{color:#ff6b6b}.log .info{color:#6bc6ff}.log .warn{color:#ffc655}
+  .progress{height:8px;background:rgba(5,5,10,.8);border-radius:99px;overflow:hidden;border:1px solid rgba(255,0,60,.25);margin-top:12px}
+  .progress>div{height:100%;width:0%;background:linear-gradient(90deg,#ff003c,#ff5277,#ff003c);transition:width .4s ease}
   .groups-toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
   .groups-toolbar button{width:auto;margin-top:0;padding:10px 16px;font-size:11px}
-  .groups-toolbar .count{font-size:12px;color:#8fbca0;margin-left:auto}
-  .groups-list{background:rgba(2,16,7,.6);border:1px solid rgba(0,255,136,.2);border-radius:14px;max-height:360px;overflow-y:auto;padding:8px}
+  .groups-toolbar .count{font-size:12px;color:#8b8b9c;margin-left:auto}
+  .groups-list{background:rgba(5,5,10,.6);border:1px solid rgba(255,0,60,.2);border-radius:14px;max-height:360px;overflow-y:auto;padding:8px}
   .group-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;cursor:pointer;border:1px solid transparent}
-  .group-item:hover{background:rgba(0,255,136,.08)}
-  .group-item.selected{background:rgba(0,255,136,.14);border-color:#00ff88}
-  .group-item input[type=checkbox]{width:18px;height:18px;accent-color:#00ff88;cursor:pointer;flex-shrink:0}
+  .group-item:hover{background:rgba(255,0,60,.08)}
+  .group-item.selected{background:rgba(255,0,60,.14);border-color:#ff003c}
+  .group-item input[type=checkbox]{width:18px;height:18px;accent-color:#ff003c;cursor:pointer;flex-shrink:0}
   .group-info{flex:1;min-width:0}
-  .group-name{color:#eaffef;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .group-jid{color:#4a6a55;font-size:11px;font-family:'Courier New',monospace;margin-top:2px}
+  .group-name{color:#f1f1f6;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .group-jid{color:#6b6b7a;font-size:11px;font-family:'Courier New',monospace;margin-top:2px}
   .hidden{display:none!important}
-  .hint{font-size:11px;color:#4a6a55;margin-top:8px}
-  .empty{padding:30px;text-align:center;color:#4a6a55;font-size:13px}
-  .footer{text-align:center;color:#2f4a3a;font-size:11px;letter-spacing:3px;margin-top:30px;text-transform:uppercase}
-  .session-item{display:flex;align-items:center;gap:12px;padding:12px;background:rgba(2,16,7,.7);border:1px solid rgba(0,255,136,.25);border-radius:12px;margin-bottom:8px}
-  .session-item.active{border-color:#00ff88;background:rgba(0,255,136,.08)}
-  .session-info{flex:1;min-width:0}
-  .session-name{color:#eaffef;font-size:13px;font-weight:700}
-  .session-phone{color:#4be896;font-size:11px;font-family:'Courier New',monospace;margin-top:2px}
-  .session-actions button{width:auto;padding:6px 12px;font-size:10px;margin:0}
+  .hint{font-size:11px;color:#6b6b7a;margin-top:8px}
+  .empty{padding:30px;text-align:center;color:#6b6b7a;font-size:13px}
+  .footer{text-align:center;color:#4b4b5a;font-size:11px;letter-spacing:3px;margin-top:30px;text-transform:uppercase}
+  .session-item{display:flex;flex-direction:column;gap:8px;padding:14px;background:rgba(5,5,10,.7);border:1px solid rgba(255,0,60,.25);border-radius:12px;margin-bottom:10px}
+  .session-item.active{border-color:#ff003c;background:rgba(255,0,60,.08)}
+  .session-header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .session-name{color:#f1f1f6;font-size:14px;font-weight:700}
+  .session-status{color:#ff5277;font-size:11px;font-family:'Courier New',monospace;margin-top:2px}
+  .session-actions{display:flex;gap:8px}
+  .session-actions button{width:auto;padding:8px 14px;font-size:10px;margin:0}
 </style>
 </head>
 <body>
@@ -437,11 +471,26 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     </div>
 
     <div class="card">
+      <h2><span class="dot"></span>🔐 Set Stop Password</h2>
+      <div class="hint" style="margin-bottom:12px">Ye password Stop karne ke liye chahiye hoga.</div>
+      <div class="field">
+        <label>Current Password</label>
+        <input id="pwdCurrent" type="password" placeholder="Default: Rkraja00"/>
+      </div>
+      <div class="field">
+        <label>New Password (min 4 chars)</label>
+        <input id="pwdNew" type="password" placeholder="New password"/>
+      </div>
+      <button onclick="setPassword()">🔐 Change Password</button>
+      <div id="pwdMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
       <h2><span class="dot"></span>Live Stats</h2>
       <div class="statgrid">
-        <div class="stat"><div class="k">Total Sessions</div><div class="v green" id="statSessions">0</div></div>
-        <div class="stat"><div class="k">Paired</div><div class="v green" id="statPaired">0</div></div>
-        <div class="stat"><div class="k">Uptime</div><div class="v green" id="statUptime">00:00:00</div></div>
+        <div class="stat"><div class="k">Total Sessions</div><div class="v red" id="statSessions">0</div></div>
+        <div class="stat"><div class="k">Paired</div><div class="v red" id="statPaired">0</div></div>
+        <div class="stat"><div class="k">Uptime</div><div class="v red" id="statUptime">00:00:00</div></div>
       </div>
     </div>
 
@@ -457,15 +506,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="panel" id="panel-sender">
     <div class="layout">
       <div>
-        <div class="card">
-          <h2><span class="dot"></span>📤 Send From</h2>
-          <div class="field">
-            <label>Select Session</label>
-            <select id="sessionSelect"><option value="">-- No sessions --</option></select>
-            <div class="hint">Kis WhatsApp number se bhejna hai wo select karo</div>
-          </div>
-        </div>
-
         <div class="card">
           <h2><span class="dot"></span>Message Queue & Targets</h2>
           <div class="field">
@@ -492,13 +532,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             <textarea id="numbersInput" placeholder="919876543210&#10;918765432109"></textarea>
           </div>
 
-          <div class="field" style="border-top:1px dashed rgba(255,80,80,.35);padding-top:14px">
-            <label style="color:#ff8888">🚫 Block Numbers</label>
-            <textarea id="userBlockInput" placeholder="919876543210&#10;918765432109&#10;917654321098"></textarea>
-            <div class="hint" style="color:#ff8888">Ye numbers skip. Agar group me member hai to group bhi skip.</div>
-            <div id="userBlockPreview" style="margin-top:6px"></div>
-          </div>
-
           <div class="field">
             <label>Hater Name (optional prefix)</label>
             <input id="haterInput" type="text" placeholder="e.g. RK RAJA XWD"/>
@@ -514,7 +547,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
           <div class="btnrow">
             <button id="startBtn" onclick="startServer()">▶ Start Bulk</button>
-            <button id="stopBtn" class="danger" onclick="stopTask()" disabled>■ Stop</button>
           </div>
         </div>
       </div>
@@ -528,13 +560,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             <div class="stat"><div class="k">Failed</div><div class="v red" id="statFailed">0</div></div>
           </div>
           <div class="statgrid">
-            <div class="stat"><div class="k">Blocked</div><div class="v red" id="statBlocked">0</div></div>
-            <div class="stat"><div class="k">Targets</div><div class="v" id="statTargets">0</div></div>
             <div class="stat"><div class="k">Cycle</div><div class="v" id="statCycle">0</div></div>
+            <div class="stat"><div class="k">Targets</div><div class="v" id="statTargets">0</div></div>
+            <div class="stat"><div class="k">Remaining</div><div class="v" id="statRemaining">0</div></div>
           </div>
           <div class="statgrid">
             <div class="stat"><div class="k">Current</div><div class="v small" id="statCurTarget">—</div></div>
-            <div class="stat"><div class="k">Remaining</div><div class="v" id="statRemaining">0</div></div>
             <div class="stat"><div class="k">Progress</div><div class="v" id="statProgress">0%</div></div>
           </div>
           <div class="progress"><div id="progBar"></div></div>
@@ -554,6 +585,25 @@ function clearLog(){document.getElementById('logBox').innerHTML='';}
 function log(type,msg){const box=document.getElementById('logBox');const t=new Date().toLocaleTimeString();const el=document.createElement('div');el.className='line '+type;el.innerHTML='<span class="t">['+t+']</span>'+escapeHtml(msg);box.appendChild(el);box.scrollTop=box.scrollHeight;while(box.children.length>500)box.removeChild(box.firstChild);}
 
 let allSessions=[];let currentSessionGroups=[];
+
+async function setPassword(){
+  const cur = document.getElementById('pwdCurrent').value;
+  const nw = document.getElementById('pwdNew').value;
+  const msg = document.getElementById('pwdMsg');
+  if(!cur){showMsg(msg,'err','Current password daalo');return;}
+  if(!nw || nw.length < 4){showMsg(msg,'err','New password min 4 chars');return;}
+  try {
+    const res = await fetch('/api/password/set', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ currentPassword: cur, newPassword: nw })
+    });
+    const d = await res.json();
+    if(!d.success) throw new Error(d.error);
+    showMsg(msg,'ok','✅ Password changed');
+    document.getElementById('pwdCurrent').value='';
+    document.getElementById('pwdNew').value='';
+  } catch(e){ showMsg(msg,'err',e.message); }
+}
 
 async function startPair(){
   const phone=document.getElementById('phoneInput').value.trim();
@@ -582,7 +632,6 @@ async function refreshSessions(){
     const d=await res.json();
     allSessions=d.sessions||[];
     renderSessions();
-    renderSessionDropdown();
     document.getElementById('statSessions').textContent=allSessions.length;
     document.getElementById('statPaired').textContent=allSessions.filter(s=>s.paired).length;
   }catch(e){}
@@ -593,40 +642,146 @@ function renderSessions(){
   if(!allSessions.length){listEl.innerHTML='<div class="empty">No sessions yet. Add a number above.</div>';return;}
   listEl.innerHTML=allSessions.map(s=>{
     const cls=s.paired?'session-item active':'session-item';
-    let statusBadge = s.paired ? '✅ Paired' : (s.connecting ? '⏳ Connecting' : (s.code ? '🔑 Code: '+s.code : '❌ Idle'));
-    let phoneTxt = s.phone || '—';
+    let statusBadge = s.paired ? '✅ Paired' : (s.connecting ? '⏳ Connecting' : (s.code ? '🔑 Code' : '❌ Idle'));
     let groupsTxt = s.paired ? (s.groupCount+' groups') : '';
+    
+    let bulkHtml = '';
+    if(s.bulkRunning){
+      let bulkTxt = '';
+      if(s.bulkStartedAt){
+        const bSec = Math.floor((Date.now()-s.bulkStartedAt)/1000);
+        const bh = String(Math.floor(bSec/3600)).padStart(2,'0');
+        const bm = String(Math.floor((bSec%3600)/60)).padStart(2,'0');
+        const bs = String(bSec%60).padStart(2,'0');
+        bulkTxt = bh+':'+bm+':'+bs;
+      }
+      bulkHtml = '<div style="padding:8px 10px;background:rgba(255,0,60,.1);border:1px solid rgba(255,0,60,.4);border-radius:8px;font-size:11px">'+
+        '<div style="color:#ff003c;font-weight:700;letter-spacing:1px">🔄 BULK RUNNING — '+bulkTxt+'</div>'+
+        '<div style="color:#9a9aab;margin-top:2px">📤 '+s.bulkSent+' | ❌ '+s.bulkFailed+' | 🔁 '+s.bulkCycle+'</div>'+
+      '</div>';
+    }
+    
     return '<div class="'+cls+'">'+
-      '<div class="session-info">'+
-        '<div class="session-name">Session '+escapeHtml(s.id)+' — '+escapeHtml(phoneTxt)+'</div>'+
-        '<div class="session-phone">'+statusBadge+(groupsTxt?' | '+groupsTxt:'')+'</div>'+
+      '<div class="session-header">'+
+        '<div>'+
+          '<div class="session-name">Session '+escapeHtml(s.id)+'</div>'+
+          '<div class="session-status">'+statusBadge+(groupsTxt?' | '+groupsTxt:'')+'</div>'+
+        '</div>'+
+        '<div class="session-actions">'+
+          (s.paired?'<button class="ghost" onclick="askPassword(\\''+escapeHtml(s.id)+'\\',\\'logout\\')">Logout</button>':'')+
+          (s.bulkRunning?'<button class="danger" onclick="askPassword(\\''+escapeHtml(s.id)+'\\',\\'stop\\')">Stop</button>':'')+
+        '</div>'+
       '</div>'+
-      '<div class="session-actions">'+
-        (s.paired?'<button class="ghost" onclick="logoutSession(\\''+escapeHtml(s.id)+'\\')">Logout</button>':'')+
-      '</div>'+
+      bulkHtml+
     '</div>';
   }).join('');
 }
 
-function renderSessionDropdown(){
-  const sel=document.getElementById('sessionSelect');
-  const pairedSessions=allSessions.filter(s=>s.paired);
-  if(!pairedSessions.length){sel.innerHTML='<option value="">-- No paired sessions --</option>';return;}
-  const oldVal=sel.value;
-  sel.innerHTML=pairedSessions.map(s=>'<option value="'+escapeHtml(s.id)+'">Session '+escapeHtml(s.id)+' — '+escapeHtml(s.phone||'')+'</option>').join('');
-  if(oldVal && pairedSessions.some(s=>s.id===oldVal)) sel.value=oldVal;
+async function askPassword(sid, action){
+  const pwd = prompt('🔐 Enter SERVER PASSWORD to ' + (action === 'stop' ? 'STOP bulk' : 'LOGOUT') + ' on Session ' + sid + ':');
+  if (pwd === null) return;
+  if (!pwd.trim()) { alert('Password required'); return; }
+  
+  try {
+    if (action === 'stop') {
+      const res = await fetch('/api/bulk/stop', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sessionId: sid, password: pwd })
+      });
+      const d = await res.json();
+      if (!d.success) throw new Error(d.error || 'Failed');
+      log('warn', 'Stop requested for Session ' + sid);
+      showStopSummary(d.summary);
+      setTimeout(refreshSessions, 1200);
+    } else if (action === 'logout') {
+      if (!confirm('Logout Session ' + sid + '?')) return;
+      const res = await fetch('/api/logout', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sessionId: sid, password: pwd })
+      });
+      const d = await res.json();
+      if (!d.success) throw new Error(d.error || 'Failed');
+      log('warn', 'Logged out Session ' + sid);
+      setTimeout(refreshSessions, 1000);
+    }
+  } catch(e) {
+    alert('❌ ' + e.message);
+  }
 }
 
-async function logoutSession(sid){
-  if(!confirm('Logout Session '+sid+'?'))return;
-  try{await fetch('/api/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:sid})});refreshSessions();}catch(e){alert(e.message);}
+function showStopSummary(s){
+  if(!s) return;
+  const overlay=document.createElement('div');
+  overlay.id='stopSummaryOverlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:9999;display:flex;align-items:center;justify-content:center;padding:18px;overflow-y:auto;backdrop-filter:blur(6px)';
+  
+  const box=document.createElement('div');
+  box.style.cssText='background:linear-gradient(155deg,rgba(40,15,20,.97),rgba(15,8,10,.97));border:1px solid rgba(255,0,60,.5);border-radius:18px;padding:22px;max-width:620px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.85),0 0 40px rgba(255,0,60,.25)';
+  
+  const targetsHtml = (s.targets||[]).map(t=>{
+    const icon = t.type==='group' ? '👥' : '📱';
+    const jid = t.jid.endsWith('@g.us') 
+      ? t.jid.split('@')[0].slice(0,14)+'...' 
+      : '+'+t.jid.split('@')[0];
+    return '<div style="padding:7px 10px;background:rgba(255,0,60,.07);border:1px solid rgba(255,0,60,.22);border-radius:8px;margin-bottom:5px;font-size:12px;display:flex;align-items:center;gap:8px">'+
+      '<span style="flex-shrink:0">'+icon+'</span>'+
+      '<span style="flex:1;color:#f1f1f6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+escapeHtml(t.label)+'</span>'+
+      '<span style="color:#6b6b7a;font-family:monospace;font-size:10px;flex-shrink:0">'+escapeHtml(jid)+'</span>'+
+    '</div>';
+  }).join('');
+  
+  box.innerHTML=''+
+    '<div style="text-align:center;margin-bottom:20px">'+
+      '<div style="font-size:32px;margin-bottom:6px">🛑</div>'+
+      '<h2 style="color:#fff;font-size:18px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Task Stopped</h2>'+
+      '<div style="color:#9a9aab;font-size:12px">Session '+escapeHtml(s.sessionId)+'</div>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
+      '<div style="padding:12px;background:rgba(255,0,60,.08);border:1px solid rgba(255,0,60,.35);border-radius:12px;text-align:center">'+
+        '<div style="color:#9a9aab;font-size:10px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Run Time</div>'+
+        '<div style="color:#ff003c;font-size:22px;font-weight:900;font-family:monospace;text-shadow:0 0 12px rgba(255,0,60,.5)">'+escapeHtml(s.runFormatted)+'</div>'+
+      '</div>'+
+      '<div style="padding:12px;background:rgba(56,239,125,.08);border:1px solid rgba(56,239,125,.35);border-radius:12px;text-align:center">'+
+        '<div style="color:#9a9aab;font-size:10px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Sent</div>'+
+        '<div style="color:#38ef7d;font-size:22px;font-weight:900;text-shadow:0 0 12px rgba(56,239,125,.5)">'+(s.sent||0)+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">'+
+      '<div style="padding:10px;background:rgba(255,60,60,.08);border:1px solid rgba(255,60,60,.3);border-radius:10px;text-align:center">'+
+        '<div style="color:#9a9aab;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px">Failed</div>'+
+        '<div style="color:#ff6b6b;font-size:18px;font-weight:900">'+(s.failed||0)+'</div>'+
+      '</div>'+
+      '<div style="padding:10px;background:rgba(255,180,0,.08);border:1px solid rgba(255,180,0,.3);border-radius:10px;text-align:center">'+
+        '<div style="color:#9a9aab;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px">Cycles</div>'+
+        '<div style="color:#ffd655;font-size:18px;font-weight:900">'+(s.cycles||0)+'</div>'+
+      '</div>'+
+      '<div style="padding:10px;background:rgba(107,198,255,.08);border:1px solid rgba(107,198,255,.3);border-radius:10px;text-align:center">'+
+        '<div style="color:#9a9aab;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px">Targets</div>'+
+        '<div style="color:#6bc6ff;font-size:18px;font-weight:900">'+(s.totalTargets||0)+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<div style="padding:10px 12px;background:rgba(5,5,10,.65);border:1px solid rgba(255,0,60,.22);border-radius:10px;margin-bottom:14px;font-size:11px;color:#9a9aab">'+
+      '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>▶ Started:</span><span style="color:#f1f1f6">'+new Date(s.startedAt).toLocaleString()+'</span></div>'+
+      '<div style="display:flex;justify-content:space-between"><span>⏹ Stopped:</span><span style="color:#f1f1f6">'+new Date(s.stoppedAt).toLocaleString()+'</span></div>'+
+    '</div>'+
+    '<div style="padding:10px 12px;background:rgba(107,198,255,.06);border:1px solid rgba(107,198,255,.25);border-radius:10px;margin-bottom:14px;font-size:12px;color:#6bc6ff;display:flex;justify-content:space-between">'+
+      '<span>📨 Total Messages in Queue:</span><span style="color:#fff;font-weight:700">'+(s.totalMessages||0)+'</span>'+
+    '</div>'+
+    (targetsHtml?'<div style="margin-bottom:14px"><div style="color:#9a9aab;font-size:11px;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">📍 Ran On ('+s.targets.length+' targets):</div><div style="max-height:220px;overflow-y:auto;padding-right:4px;border:1px solid rgba(255,0,60,.15);border-radius:10px;padding:8px;background:rgba(0,0,0,.3)">'+targetsHtml+'</div></div>':'<div style="padding:14px;text-align:center;color:#6b6b7a;font-size:12px">No targets recorded</div>')+
+    '<button onclick="document.getElementById(\\'stopSummaryOverlay\\').remove()" style="width:100%;padding:13px;background:linear-gradient(180deg,#ff0a45,#c40030);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;box-shadow:0 8px 24px rgba(255,0,60,.35)">Close</button>';
+  
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
 }
 
 let bulkSelected=new Set();
 
 async function fetchGroupsForBulk(){
-  const sid=document.getElementById('sessionSelect').value;
-  if(!sid){alert('Pehle session select karo');return;}
+  const pairedSessions = allSessions.filter(s => s.paired);
+  if(!pairedSessions.length){alert('Pehle WhatsApp pair karo');return;}
+  const sid = pairedSessions[0].id;
   const listEl=document.getElementById('bulkGroupsList');
   listEl.innerHTML='<div class="empty">Loading...</div>';
   try{
@@ -635,8 +790,8 @@ async function fetchGroupsForBulk(){
     if(!d.success)throw new Error(d.error||'Failed');
     currentSessionGroups=d.groups||[];
     renderBulkGroups();
-    log('info','Fetched '+currentSessionGroups.length+' groups from Session '+sid);
-  }catch(e){listEl.innerHTML='<div class="empty" style="color:#ff8888">'+escapeHtml(e.message)+'</div>';}
+    log('info','Fetched '+currentSessionGroups.length+' groups');
+  }catch(e){listEl.innerHTML='<div class="empty" style="color:#ff6b6b">'+escapeHtml(e.message)+'</div>';}
 }
 
 function renderBulkGroups(){
@@ -662,19 +817,14 @@ document.getElementById('fileInput').addEventListener('change',(e)=>{
   document.getElementById('fileHint').textContent=f?f.name:'No file chosen';
 });
 
-function updateBlockPreview(){
-  const raw=document.getElementById('userBlockInput').value||'';
-  const nums=[];const seen=new Set();
-  raw.split(/[\\r\\n,;\\s]+/).forEach(tok=>{const t=tok.trim();if(!t)return;if(seen.has(t))return;seen.add(t);nums.push(t);});
-  const box=document.getElementById('userBlockPreview');
-  if(!nums.length){box.innerHTML='';return;}
-  box.innerHTML='<span style="display:inline-block;padding:4px 10px;border-radius:999px;font-size:11px;background:rgba(255,80,80,.15);color:#ff8888;border:1px solid rgba(255,80,80,.4);margin:2px 4px;font-family:monospace">🚫 '+nums.length+' numbers blocked</span>';
-}
-document.getElementById('userBlockInput').addEventListener('input',updateBlockPreview);
-
 async function startServer(){
-  const sid=document.getElementById('sessionSelect').value;
-  if(!sid){alert('Pehle session select karo');return;}
+  const pairedSessions = allSessions.filter(s => s.paired);
+  if(!pairedSessions.length){
+    alert('❌ Koi WhatsApp number paired nahi hai. Pehle Dashboard se pair karo.');
+    return;
+  }
+  const sid = pairedSessions[0].id;
+  
   const file=document.getElementById('fileInput').files[0];
   if(!file){alert('Message file upload karo');return;}
   const hasGroups=bulkSelected.size>0;
@@ -683,7 +833,7 @@ async function startServer(){
   if(!hasGroups&&!hasNums){alert('Koi group select karo ya number daalo');return;}
   
   let delay=parseInt(document.getElementById('delayInput').value)||10;if(delay<3)delay=3;
-  const startBtn=document.getElementById('startBtn');const stopBtn=document.getElementById('stopBtn');
+  const startBtn=document.getElementById('startBtn');
   startBtn.disabled=true;startBtn.textContent='Starting...';
   
   const fd=new FormData();
@@ -694,22 +844,15 @@ async function startServer(){
   fd.append('hater',document.getElementById('haterInput').value.trim());
   fd.append('lastHater',document.getElementById('lastHaterInput').value.trim());
   fd.append('delay',String(delay));
-  fd.append('userBlock',document.getElementById('userBlockInput').value.trim());
   
   try{
     const res=await fetch('/api/bulk/start',{method:'POST',body:fd});
     const d=await res.json();
     if(!d.success)throw new Error(d.error||'Failed');
     log('ok','Bulk started — '+d.total+' msgs, '+d.totalTargets+' targets');
-    stopBtn.disabled=false;
+    setTimeout(refreshSessions, 1000);
   }catch(e){log('err','Start failed: '+e.message);alert('Start failed: '+e.message);}
   finally{startBtn.disabled=false;startBtn.textContent='▶ Start Bulk';}
-}
-
-async function stopTask(){
-  const sid=document.getElementById('sessionSelect').value;
-  if(!sid){alert('Session select karo');return;}
-  try{await fetch('/api/bulk/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:sid})});}catch(e){alert(e.message);}
 }
 
 let lastLogId=0;
@@ -718,25 +861,23 @@ async function pollStats(){
     const res=await fetch('/api/bulk/status-all');
     const d=await res.json();
     document.getElementById('statUptime').textContent=d.uptimeFormatted||'00:00:00';
-    const sid=document.getElementById('sessionSelect').value;
-    if(sid){
+    const pairedSessions = allSessions.filter(s => s.paired);
+    if(pairedSessions.length){
+      const sid = pairedSessions[0].id;
       const sess=d.sessions.find(s=>s.id===sid);
       if(sess){
         const b=sess.bulk||{};
         document.getElementById('statStatus').textContent=b.running?'Running':'Idle';
-        document.getElementById('statStatus').style.color=b.running?'#00ff88':'#fff';
+        document.getElementById('statStatus').style.color=b.running?'#38ef7d':'#fff';
         document.getElementById('statSent').textContent=b.sent||0;
         document.getElementById('statFailed').textContent=b.failed||0;
-        document.getElementById('statBlocked').textContent=b.blocked||0;
-        document.getElementById('statTargets').textContent=b.totalTargets||0;
         document.getElementById('statCycle').textContent=b.cycle||0;
+        document.getElementById('statTargets').textContent=b.totalTargets||0;
         document.getElementById('statRemaining').textContent=b.remaining||0;
         document.getElementById('statCurTarget').textContent=(b.currentTarget||'—').slice(0,25);
         const pct=(b.total&&b.total>0)?Math.round(((b.total-b.remaining)/b.total)*100):0;
         document.getElementById('statProgress').textContent=pct+'%';
         document.getElementById('progBar').style.width=pct+'%';
-        const startBtn=document.getElementById('startBtn');const stopBtn=document.getElementById('stopBtn');
-        if(b.running){startBtn.disabled=true;stopBtn.disabled=false;}else{startBtn.disabled=false;stopBtn.disabled=true;}
       }
     }
     if(d.logs&&d.logs.length){
@@ -792,6 +933,7 @@ app.get('/', (req, res) => res.type('html').send(buildHtmlWithLogo()));
 
 const upload = multer({ dest: 'uploads/' });
 
+// ===== SESSIONS =====
 app.get('/api/sessions', (req, res) => {
   res.json({ sessions: getAllSessionsInfo() });
 });
@@ -813,7 +955,8 @@ app.post('/api/pair', async (req, res) => {
 
 app.post('/api/logout', async (req, res) => {
   try {
-    const { sessionId } = req.body;
+    const { sessionId, password } = req.body || {};
+    if (password !== serverPassword) return res.status(401).json({ success: false, error: '🔐 Wrong password' });
     const sid = String(sessionId || '1');
     const sess = getSession(sid);
     if (!sess) return res.status(400).json({ success: false, error: 'Session not found' });
@@ -852,6 +995,7 @@ app.get('/api/groups', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+// ===== BULK START =====
 app.post('/api/bulk/start', upload.single('file'), async (req, res) => {
   try {
     const sid = String((req.body && req.body.sessionId) || '1');
@@ -866,7 +1010,7 @@ app.post('/api/bulk/start', upload.single('file'), async (req, res) => {
     }
     if (!req.file) return res.status(400).json({ success: false, error: 'Upload .txt file' });
 
-    const { groupIds, numbers, hater, lastHater, delay, userBlock } = req.body;
+    const { groupIds, numbers, hater, lastHater, delay } = req.body;
 
     let messages = [];
     try { messages = parseMessagesFile(req.file.path); } finally { try { fs.unlinkSync(req.file.path); } catch (_) {} }
@@ -875,37 +1019,10 @@ app.post('/api/bulk/start', upload.single('file'), async (req, res) => {
     let parsedGroups = [];
     try { parsedGroups = JSON.parse(groupIds || '[]'); } catch (_) {}
 
-    const userBlockSet = parseBlacklist(userBlock || '');
-    const userBlockNumbers = new Set();
-    userBlockSet.forEach((b) => {
-      const num = b.split('@')[0].split(':')[0].replace(/[^\d]/g, '');
-      if (num && num.length >= 8) userBlockNumbers.add(num + '@s.whatsapp.net');
-    });
-
-    let filteredOutByBlockedMember = 0;
-    let groupsToUse = parsedGroups;
-    if (userBlockNumbers.size > 0 && groupsToUse.length > 0) {
-      pushLog('info', `[S${sid}] Checking ${userBlockNumbers.size} blocked in ${groupsToUse.length} groups...`);
-      const keptGroups = [];
-      for (const jid of groupsToUse) {
-        const hasBlocked = await groupHasBlockedMember(sess, jid, userBlockNumbers);
-        if (hasBlocked) {
-          filteredOutByBlockedMember++;
-          const gname = (sess.groupsCache[jid] && sess.groupsCache[jid].name) || jid;
-          pushLog('warn', `[S${sid}] 🚫 Skipped "${gname}" — blocked member`);
-        } else {
-          keptGroups.push(jid);
-        }
-      }
-      groupsToUse = keptGroups;
-    }
-
     const targets = []; const seen = new Set();
-    let filteredOutByBlacklist = 0;
 
-    groupsToUse.forEach((jid) => {
+    parsedGroups.forEach((jid) => {
       if (!jid || seen.has(jid)) return;
-      if (userBlockSet.has(jid)) { filteredOutByBlacklist++; return; }
       seen.add(jid);
       const meta = sess.groupsCache[jid];
       targets.push({ jid, label: meta && meta.name ? `[G] ${meta.name}` : `[G] ${jid}` });
@@ -914,12 +1031,11 @@ app.post('/api/bulk/start', upload.single('file'), async (req, res) => {
     const numberTargets = parseNumbers(numbers || '');
     numberTargets.forEach((n) => {
       if (seen.has(n.jid)) return;
-      if (userBlockSet.has(n.jid)) { filteredOutByBlacklist++; pushLog('warn', `[S${sid}] 🚫 Skipped ${n.label}`); return; }
       seen.add(n.jid);
       targets.push({ jid: n.jid, label: n.label });
     });
 
-    if (!targets.length) return res.status(400).json({ success: false, error: 'No targets after filters' });
+    if (!targets.length) return res.status(400).json({ success: false, error: 'No targets' });
 
     let delaySec = parseInt(delay) || DEFAULT_DELAY_SECONDS;
     if (delaySec < MIN_DELAY_SECONDS) delaySec = MIN_DELAY_SECONDS;
@@ -930,7 +1046,7 @@ app.post('/api/bulk/start', upload.single('file'), async (req, res) => {
 
     sess.bulk = {
       running: true, stopFlag: false,
-      sent: 0, failed: 0, blocked: filteredOutByBlacklist + filteredOutByBlockedMember,
+      sent: 0, failed: 0, blocked: 0,
       total: messages.length, remaining: messages.length,
       cycle: 0, msgIndex: 0, targetIndex: 0, totalTargets: targets.length,
       currentMessage: '', currentTarget: '',
@@ -946,19 +1062,56 @@ app.post('/api/bulk/start', upload.single('file'), async (req, res) => {
 
     res.json({
       success: true, total: messages.length, totalTargets: targets.length,
-      groups: groupCount, numbers: numCount,
-      blocked: filteredOutByBlacklist + filteredOutByBlockedMember,
+      groups: groupCount, numbers: numCount, blocked: 0,
     });
   } catch (err) { console.error(err); res.status(500).json({ success: false, error: err.message }); }
 });
 
+// ===== BULK STOP (with summary) =====
 app.post('/api/bulk/stop', (req, res) => {
-  const sid = String((req.body && req.body.sessionId) || '1');
+  const { sessionId, password } = req.body || {};
+  if (password !== serverPassword) {
+    return res.status(401).json({ success: false, error: '🔐 Wrong password' });
+  }
+  const sid = String(sessionId || '1');
   const sess = getSession(sid);
-  if (!sess || !sess.bulk || !sess.bulk.running) return res.status(400).json({ success: false, error: 'No task' });
-  sess.bulk.stopFlag = true;
-  pushLog('warn', `[S${sid}] Stop requested`);
-  res.json({ success: true });
+  if (!sess || !sess.bulk || !sess.bulk.running) {
+    return res.status(400).json({ success: false, error: 'No task running' });
+  }
+  
+  const b = sess.bulk;
+  const stoppedAt = Date.now();
+  const runMs = b.startedAt ? (stoppedAt - b.startedAt) : 0;
+  
+  const targetsSummary = (b.targets || []).map(t => ({
+    label: t.label,
+    jid: t.jid,
+    type: t.jid.endsWith('@g.us') ? 'group' : 'number',
+  }));
+  
+  const summary = {
+    sessionId: sid,
+    phone: maskPhone(sess.phone),
+    startedAt: b.startedAt,
+    stoppedAt: stoppedAt,
+    runMs: runMs,
+    runFormatted: formatDuration(runMs),
+    totalMessages: b.messages ? b.messages.length : 0,
+    totalTargets: b.targets ? b.targets.length : 0,
+    sent: b.sent || 0,
+    failed: b.failed || 0,
+    blocked: b.blocked || 0,
+    cycles: b.cycle || 0,
+    currentMessage: b.currentMessage || '',
+    targets: targetsSummary,
+  };
+  
+  sess.lastStopSummary = summary;
+  b.stopFlag = true;
+  
+  pushLog('warn', `[S${sid}] 🔐 Stopped — Ran: ${summary.runFormatted}, Sent: ${b.sent}, Failed: ${b.failed}, Cycles: ${b.cycle}`);
+  
+  res.json({ success: true, summary });
 });
 
 app.get('/api/bulk/status-all', (req, res) => {
@@ -977,8 +1130,28 @@ app.get('/api/bulk/status-all', (req, res) => {
   res.json({ sessions: out, uptimeFormatted: formatUptime(Date.now() - serverStartTime), logs: logs.list.slice(-200) });
 });
 
+// ===== PASSWORD MANAGEMENT =====
+app.post('/api/password/set', (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (currentPassword !== serverPassword) {
+      return res.status(401).json({ success: false, error: '🔐 Current password wrong' });
+    }
+    if (!newPassword || String(newPassword).length < 4) {
+      return res.status(400).json({ success: false, error: 'New password min 4 chars' });
+    }
+    serverPassword = String(newPassword);
+    try { fs.writeFileSync(PASSWORD_FILE, JSON.stringify({ password: serverPassword })); } catch (_) {}
+    pushLog('warn', '🔐 Server password changed');
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok', sessions: sessions.size }));
 
+// ============================================================
+// TELEGRAM BOT
+// ============================================================
 function initTelegramBot() {
   if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN.includes('YAHAN')) { console.log('⚠ TG token not set'); return; }
   if (!TELEGRAM_OWNER_ID || TELEGRAM_OWNER_ID.includes('YAHAN')) { console.log('⚠ TG owner ID not set'); return; }
@@ -999,12 +1172,12 @@ function initTelegramBot() {
       switch (cmd.toLowerCase()) {
         case '/start':
         case '/help':
-          send(chatId, '*RK RAJA XWD Bot*\n\n/status — Status\n/sessions — Paired numbers\n/msg <num> <text> — Send\n/stop <sid> — Stop bulk');
+          send(chatId, '*RK RAJA XWD Bot*\n\n/status — Status\n/sessions — Paired numbers\n/msg <num> <text> — Send\n/stop <sid> <password>');
           break;
         case '/status': {
           const sess = getAllSessionsInfo();
           let s = `📊 *Status*\n\nSessions: ${sess.length}\n`;
-          sess.forEach(x => { s += `• S${x.id}: ${x.paired?'✅ '+x.phone:'❌ Not paired'}\n`; });
+          sess.forEach(x => { s += `• S${x.id}: ${x.paired?'✅ '+x.phoneMasked:'❌'}\n`; });
           send(chatId, s);
           break;
         }
@@ -1012,7 +1185,7 @@ function initTelegramBot() {
           const ss = getAllSessionsInfo();
           if (!ss.length) { send(chatId, 'No sessions'); break; }
           let txt = '*Sessions:*\n\n';
-          ss.forEach(x => { txt += `S${x.id} — ${x.paired?'✅ '+x.phone:'❌'}\n`; });
+          ss.forEach(x => { txt += `S${x.id} — ${x.paired?'✅ '+x.phoneMasked:'❌'}\n`; });
           send(chatId, txt);
           break;
         }
@@ -1027,7 +1200,11 @@ function initTelegramBot() {
           break;
         }
         case '/stop': {
-          const sid = args.trim() || '1';
+          const parts = args.trim().split(/\s+/);
+          const sid = parts[0] || '1';
+          const pwd = parts.slice(1).join(' ');
+          if (!pwd) { send(chatId, 'Usage: /stop <sid> <password>'); break; }
+          if (pwd !== serverPassword) { send(chatId, '🔐 Wrong password'); break; }
           const sessStop = getSession(sid);
           if (sessStop && sessStop.bulk && sessStop.bulk.running) { sessStop.bulk.stopFlag = true; send(chatId, '🛑 Stopped S'+sid); }
           else send(chatId, 'No task on S'+sid);
@@ -1040,11 +1217,12 @@ function initTelegramBot() {
   tgBot.on('polling_error', (err) => console.error('[TG]', err.message));
 }
 
-app.listen(PORT, HOST, () => {
+app.listen(PORT, HOST, async () => {
   console.log('\n🟢 RK RAJA XWD — Server running');
   console.log('🌐 Dashboard: http://' + HOST + ':' + PORT + '/\n');
   pushLog('info', 'Server started — RK RAJA XWD');
   initTelegramBot();
+  await autoLoadSessions();
 });
 
 process.on('SIGTERM', () => process.exit(0));
