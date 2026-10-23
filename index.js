@@ -1,5 +1,5 @@
 /**
- * RK RAJA XWD — Multi-User WhatsApp Server (Fully Fixed for Render)
+ * RK RAJA XWD — Multi-User WhatsApp Server (Fully Fixed & Complete)
  */
 
 const makeWASocket = require('@whiskeysockets/baileys').default;
@@ -13,8 +13,8 @@ const http = require('http');
 const multer = require('multer');
 const crypto = require('crypto');
 
-process.on('uncaughtException', (e) => console.error('⚠', e.message));
-process.on('unhandledRejection', (e) => console.error('⚠', e?.message || e));
+process.on('uncaughtException', (e) => console.error('⚠ Uncaught:', e.message));
+process.on('unhandledRejection', (e) => console.error('⚠ Unhandled:', e?.message || e));
 
 const PORT = process.env.PORT || 25152;
 const HOST = '0.0.0.0';
@@ -24,7 +24,7 @@ const TG_OWNER = process.env.TELEGRAM_OWNER_ID || '';
 const SERVER_PWD = process.env.SERVER_PWD || 'rkr@ja@2025';
 const START = Date.now();
 
-// Render ke liye DATA_DIR (Disk mount karna zaroori hai)
+// Render Disk mount path (Ensure you add Disk at /var/data in Render)
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'users_data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -33,9 +33,6 @@ const users = new Map();
 const tokens = new Map();
 const globalLogs = { list: [], id: 0 };
 
-// ============================================================
-// HELPERS
-// ============================================================
 function log(type, msg) {
   globalLogs.list.push({ id: ++globalLogs.id, ts: Date.now(), type, msg });
   if (globalLogs.list.length > 800) globalLogs.list.splice(0, 200);
@@ -52,7 +49,6 @@ function maskPhone(p) {
   const s = String(p);
   return s.length <= 4 ? '****' : s.slice(0, 2) + '****' + s.slice(-2);
 }
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function genToken() { return crypto.randomBytes(24).toString('hex'); }
 function userDir(uid) {
   const d = path.join(DATA_DIR, uid);
@@ -64,9 +60,6 @@ async function notify(text) {
   try { await tgBot.sendMessage(TG_OWNER, text, { parse_mode: 'Markdown' }); } catch (_) {}
 }
 
-// ============================================================
-// USER SYSTEM
-// ============================================================
 function saveUser(u) {
   try {
     fs.writeFileSync(path.join(userDir(u.userId), 'user.json'), JSON.stringify({
@@ -101,59 +94,27 @@ function uLog(user, type, msg) {
   if (user.logs.list.length > 400) user.logs.list.splice(0, 100);
 }
 
-// ============================================================
-// SESSION
-// ============================================================
 function newSess(user, sid) {
   return {
-    userId: user.userId,
-    id: String(sid),
-    sock: null,
-    isPaired: false,
-    isConnecting: false,
-    isRegistered: false,
-    pairingRequested: false,
-    pairingCode: null,
-    phone: null,
-    connectedAt: null,
-    lastError: null,
-    authDir: path.join(userDir(user.userId), `auth_info_baileys_${sid}`),
-    groups: {},
-    bulk: null,
-    suspended: false,
-    reconnectAttempts: 0,
-    reconnectTimer: null,
-    intentionalClose: false,
+    userId: user.userId, id: String(sid), sock: null, isPaired: false, isConnecting: false,
+    isRegistered: false, pairingRequested: false, pairingCode: null, phone: null,
+    connectedAt: null, lastError: null, authDir: path.join(userDir(user.userId), `auth_info_baileys_${sid}`),
+    groups: {}, bulk: null, suspended: false, reconnectAttempts: 0, reconnectTimer: null, intentionalClose: false,
   };
 }
 
-function getSess(user, sid) {
-  if (!user) return null;
-  return user.sessions.get(String(sid || '1'));
-}
-
+function getSess(user, sid) { return user ? user.sessions.get(String(sid || '1')) : null; }
 function ready(s) { return !!(s && s.sock && s.isPaired && !s.suspended); }
 
 function sessInfo(s) {
   return {
-    id: s.id,
-    phone: s.phone,
-    phoneMasked: maskPhone(s.phone),
-    paired: s.isPaired,
-    connecting: s.isConnecting,
-    registered: s.isRegistered,
-    code: s.isPaired ? null : s.pairingCode,
-    suspended: s.suspended,
-    error: s.lastError,
-    connectedAt: s.connectedAt,
-    groupCount: Object.keys(s.groups).length,
-    bulkRunning: !!(s.bulk && s.bulk.running),
-    bulkStartedAt: s.bulk && s.bulk.running ? s.bulk.startedAt : null,
-    bulkSent: s.bulk ? s.bulk.sent : 0,
-    bulkFailed: s.bulk ? s.bulk.failed : 0,
-    bulkCycle: s.bulk ? s.bulk.cycle : 0,
-    bulkTotal: s.bulk ? s.bulk.total : 0,
-    bulkRemaining: s.bulk ? s.bulk.remaining : 0,
+    id: s.id, phone: s.phone, phoneMasked: maskPhone(s.phone), paired: s.isPaired,
+    connecting: s.isConnecting, registered: s.isRegistered, code: s.isPaired ? null : s.pairingCode,
+    suspended: s.suspended, error: s.lastError, connectedAt: s.connectedAt,
+    groupCount: Object.keys(s.groups).length, bulkRunning: !!(s.bulk && s.bulk.running),
+    bulkStartedAt: s.bulk && s.bulk.running ? s.bulk.startedAt : null, bulkSent: s.bulk ? s.bulk.sent : 0,
+    bulkFailed: s.bulk ? s.bulk.failed : 0, bulkCycle: s.bulk ? s.bulk.cycle : 0,
+    bulkTotal: s.bulk ? s.bulk.total : 0, bulkRemaining: s.bulk ? s.bulk.remaining : 0,
   };
 }
 
@@ -164,18 +125,12 @@ function userSessions(user) {
   return out.sort((a, b) => (parseInt(a.id) || 0) - (parseInt(b.id) || 0));
 }
 
-// ============================================================
-// CONNECT SESSION (FIXED PAIRING)
-// ============================================================
 async function startSession(user, sid, phone) {
   sid = String(sid);
   let s = getSess(user, sid);
   if (!s) { s = newSess(user, sid); user.sessions.set(sid, s); }
 
-  if (s.sock) {
-    try { s.sock.ev.removeAllListeners(); s.sock.end(undefined); } catch (_) {}
-    s.sock = null;
-  }
+  if (s.sock) { try { s.sock.ev.removeAllListeners(); s.sock.end(undefined); } catch (_) {} s.sock = null; }
   if (s.reconnectTimer) { clearTimeout(s.reconnectTimer); s.reconnectTimer = null; }
 
   const cf = path.join(s.authDir, 'creds.json');
@@ -183,20 +138,14 @@ async function startSession(user, sid, phone) {
   try {
     if (fs.existsSync(cf)) {
       const c = JSON.parse(fs.readFileSync(cf, 'utf8'));
-      if (c && c.me && c.me.id) {
-        registered = true;
-        s.phone = c.me.id.split(':')[0].split('@')[0];
-      }
+      if (c && c.me && c.me.id) { registered = true; s.phone = c.me.id.split(':')[0].split('@')[0]; }
     }
   } catch (_) {}
   s.isRegistered = registered;
 
-  if (phone && registered) {
-    return { ok: false, error: 'Session already registered. Logout first.' };
-  }
+  if (phone && registered) return { ok: false, error: 'Session already registered. Logout first.' };
 
-  s.isConnecting = true;
-  s.intentionalClose = false;
+  s.isConnecting = true; s.intentionalClose = false;
   if (phone) s.phone = phone;
 
   try {
@@ -204,41 +153,29 @@ async function startSession(user, sid, phone) {
     const { version } = await fetchLatestBaileysVersion();
 
     s.sock = makeWASocket({
-      version,
-      auth: state,
-      printQRInTerminal: false,
-      logger: pino({ level: 'silent' }),
-      browser: Browsers.ubuntu('Chrome'),
-      mobile: false,
-      syncFullHistory: false,
-      markOnlineOnConnect: true,
-      generateHighQualityLinkPreview: false,
+      version, auth: state, printQRInTerminal: false, logger: pino({ level: 'silent' }),
+      browser: Browsers.ubuntu('Chrome'), mobile: false, syncFullHistory: false,
+      markOnlineOnConnect: true, generateHighQualityLinkPreview: false,
       getMessage: async () => ({ conversation: '' }),
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 25000,
-      retryRequestDelayMs: 2000,
+      connectTimeoutMs: 60000, defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000, retryRequestDelayMs: 2000,
     });
 
     s.sock.ev.on('creds.update', saveCreds);
 
-    // 🔥 FAST PAIRING CODE
     if (!state.creds.registered && phone && !s.pairingRequested) {
       s.pairingRequested = true;
       const cleanPhone = String(phone).replace(/\D/g, '');
-
       setTimeout(async () => {
         try {
           if (!s.sock || s.isPaired) return;
           const code = await s.sock.requestPairingCode(cleanPhone);
-          s.pairingCode = code;
-          s.lastError = null;
+          s.pairingCode = code; s.lastError = null;
           log('info', `[${user.username}/S${sid}] 🔑 ${code}`);
           uLog(user, 'info', `[S${sid}] Code: ${code}`);
           await notify(`🔑 *Pairing Code*\n👤 ${user.username}\n📱 S${sid}\n📞 \`${cleanPhone}\`\n🔢 \`${code}\``);
         } catch (e) {
-          s.pairingCode = null;
-          s.lastError = 'Pair failed: ' + e.message;
+          s.pairingCode = null; s.lastError = 'Pair failed: ' + e.message;
           log('err', `[${user.username}/S${sid}] Pair error: ${e.message}`);
           s.pairingRequested = false;
         }
@@ -257,14 +194,9 @@ async function startSession(user, sid, phone) {
       const { connection, lastDisconnect } = update;
 
       if (connection === 'open') {
-        s.isPaired = true;
-        s.isConnecting = false;
-        s.pairingCode = null;
-        s.pairingRequested = false;
-        s.suspended = false;
-        s.reconnectAttempts = 0;
-        s.connectedAt = new Date().toISOString();
-        s.lastError = null;
+        s.isPaired = true; s.isConnecting = false; s.pairingCode = null;
+        s.pairingRequested = false; s.suspended = false; s.reconnectAttempts = 0;
+        s.connectedAt = new Date().toISOString(); s.lastError = null;
         log('ok', `[${user.username}/S${sid}] Connected`);
         uLog(user, 'ok', `[S${sid}] Connected`);
         await notify(`✅ *Connected* — ${user.username} S${sid}`);
@@ -285,8 +217,7 @@ async function startSession(user, sid, phone) {
 
       if (connection === 'close') {
         const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-        s.isPaired = false;
-        s.isConnecting = false;
+        s.isPaired = false; s.isConnecting = false;
 
         if (code === DisconnectReason.loggedOut || code === 401) {
           s.suspended = true; s.lastError = 'Logged out';
@@ -300,40 +231,27 @@ async function startSession(user, sid, phone) {
           await notify(`🚫 SUSPENDED — ${user.username} S${sid}`);
           return;
         }
-
-        // 🔥 515 Fix (Reconnect after pairing)
         if (code === 515 || code === DisconnectReason.restartRequired) {
           log('info', `[${user.username}/S${sid}] restartRequired → reconnecting`);
-          s.reconnectTimer = setTimeout(() => {
-            s.reconnectTimer = null;
-            startSession(user, sid, null).catch(() => {});
-          }, 1200);
+          s.reconnectTimer = setTimeout(() => { s.reconnectTimer = null; startSession(user, sid, null).catch(() => {}); }, 1200);
           return;
         }
-
         if (!s.intentionalClose && s.phone && !s.suspended) {
           s.reconnectAttempts++;
           if (s.reconnectAttempts > 25) { s.suspended = true; s.lastError = 'Too many reconnects'; return; }
           const wait = Math.min(2000 + s.reconnectAttempts * 1500, 30000);
-          s.reconnectTimer = setTimeout(() => {
-            s.reconnectTimer = null;
-            startSession(user, sid, null).catch(() => {});
-          }, wait);
+          s.reconnectTimer = setTimeout(() => { s.reconnectTimer = null; startSession(user, sid, null).catch(() => {}); }, wait);
         }
       }
     });
 
   } catch (e) {
-    s.isConnecting = false;
-    s.lastError = e.message;
+    s.isConnecting = false; s.lastError = e.message;
     return { ok: false, error: e.message };
   }
   return { ok: true };
 }
 
-// ============================================================
-// WORKER
-// ============================================================
 async function runWorker(user, s) {
   const b = s.bulk;
   if (!b || b.alive) return;
@@ -350,8 +268,7 @@ async function runWorker(user, s) {
         for (let ti = 0; ti < b.targets.length && !b.stopFlag; ti++) {
           if (s.suspended) break;
           const t = b.targets[ti];
-          b.targetIndex = ti;
-          b.currentTarget = t.label;
+          b.targetIndex = ti; b.currentTarget = t.label;
           if (!ready(s)) { await sleep(2000); break; }
           try {
             await s.sock.sendMessage(t.jid, { text: b.messages[mi] });
@@ -366,9 +283,7 @@ async function runWorker(user, s) {
         }
         if (s.suspended) break;
       }
-      if (!b.stopFlag && !s.suspended) {
-        b.cycle++; b.msgIndex = 0; b.targetIndex = 0; b.remaining = b.messages.length;
-      }
+      if (!b.stopFlag && !s.suspended) { b.cycle++; b.msgIndex = 0; b.targetIndex = 0; b.remaining = b.messages.length; }
     }
   } catch (e) {
     if (!b.stopFlag && !s.suspended) { b.alive = false; setTimeout(() => runWorker(user, s), 3000); return; }
@@ -386,9 +301,6 @@ setInterval(() => {
   });
 }, 20000);
 
-// ============================================================
-// AUTO LOAD
-// ============================================================
 async function autoLoad() {
   for (const user of users.values()) {
     try {
@@ -407,9 +319,6 @@ async function autoLoad() {
   }
 }
 
-// ============================================================
-// PARSERS
-// ============================================================
 function parseMsgs(fp) {
   const c = fs.readFileSync(fp, 'utf8');
   const seen = new Set(); const out = [];
@@ -428,14 +337,13 @@ function parseNums(raw) {
   const out = []; const seen = new Set();
   String(raw).split(/[\r\n,;\s]+/).forEach(t => {
     const j = normJid(t); if (!j || seen.has(j)) return;
-    seen.add(j);
-    out.push({ jid: j, label: j.endsWith('@g.us') ? '[G] ' + j : '[N] +' + j.split('@')[0] });
+    seen.add(j); out.push({ jid: j, label: j.endsWith('@g.us') ? '[G] ' + j : '[N] +' + j.split('@')[0] });
   });
   return out;
 }
 
 // ============================================================
-// HTML FRONTEND (Original UI Restored)
+// HTML FRONTEND (COMPLETE & FIXED)
 // ============================================================
 const HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -528,7 +436,6 @@ textarea{resize:vertical;min-height:70px}
 </head>
 <body>
 
-<!-- AUTH SCREEN -->
 <div id="authScreen" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.96);display:flex;align-items:center;justify-content:center;padding:18px;overflow-y:auto">
   <div style="max-width:400px;width:100%;background:rgba(0,15,0,.98);border:1px solid rgba(0,255,65,.5);border-radius:12px;padding:26px 22px;margin:auto">
     <h2 style="color:#00ff41;text-align:center;font-size:22px;letter-spacing:3px;margin-bottom:4px;text-transform:uppercase">RK RAJA XWD</h2>
@@ -556,7 +463,6 @@ textarea{resize:vertical;min-height:70px}
   </div>
 </div>
 
-<!-- MAIN APP -->
 <div class="c hide" id="app">
   <div class="topbar">
     <div>👤 <b id="topUser">—</b></div>
@@ -978,7 +884,6 @@ const app = express();
 app.use(express.json());
 app.get('/', (req, res) => res.type('html').send(HTML));
 
-// ⚡ HEALTH CHECK (Render ping ke liye)
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime(), users: users.size }));
 
 const upload = multer({ dest: 'uploads/' });
@@ -990,8 +895,7 @@ function auth(req, res, next) {
   if (!userId) return res.status(401).json({ success: false, error: 'Invalid token' });
   const u = users.get(userId);
   if (!u) return res.status(401).json({ success: false, error: 'User not found' });
-  req.user = u;
-  req.token = token;
+  req.user = u; req.token = token;
   next();
 }
 
@@ -1050,7 +954,7 @@ app.post('/api/pair', auth, async (req, res) => {
     if (fs.existsSync(cf)) {
       try {
         const c = JSON.parse(fs.readFileSync(cf, 'utf8'));
-        if (c && c.me && c.me.id) return res.status(400).json({ success: false, error: `Session ${sid} already registered. Logout first or use different ID.` });
+        if (c && c.me && c.me.id) return res.status(400).json({ success: false, error: `Session ${sid} already registered. Logout first.` });
       } catch (_) {}
     }
 
@@ -1178,14 +1082,10 @@ app.get('/api/status', auth, (req, res) => {
   res.json({ success: true, uptimeFormatted: fmt(Date.now() - START), logs: user.logs.list.slice(-200), sessions: out });
 });
 
-// ============================================================
-// TELEGRAM BOT
-// ============================================================
 async function initTG() {
-  if (!TG_TOKEN || !TG_OWNER) { console.log('⚠ TG not set'); return; }
+  if (!TG_TOKEN || !TG_OWNER) return;
   const TB = require('node-telegram-bot-api');
   tgBot = new TB(TG_TOKEN, { polling: true });
-  console.log('🤖 TG started');
   const isOwner = (msg) => String(msg.chat.id) === String(TG_OWNER);
   const send = (id, text, opts) => { try { tgBot.sendMessage(id, text, Object.assign({ parse_mode: 'Markdown' }, opts || {})); } catch (_) {} };
 
@@ -1199,22 +1099,13 @@ async function initTG() {
       if (!users.size) s += 'No users';
       users.forEach(u => {
         const paired = [...u.sessions.values()].filter(x => x.isPaired).length;
-        const running = [...u.sessions.values()].filter(x => x.bulk && x.bulk.running).length;
-        s += `• \`${u.username}\` — ${paired}p / ${running}r\n`;
+        s += `• \`${u.username}\` — ${paired}p\n`;
       });
       send(chatId, s);
     } else if (t === '/status') {
       let paired = 0, running = 0;
       users.forEach(u => u.sessions.forEach(s => { if (s.isPaired) paired++; if (s.bulk && s.bulk.running) running++; }));
       send(chatId, `*📊 Server*\n\n👥 Users: ${users.size}\n📱 Paired: ${paired}\n🔄 Running: ${running}\n⏱ ${fmt(Date.now() - START)}`);
-    } else if (t === '/stats') {
-      let s = '*All Sessions:*\n\n';
-      users.forEach(u => {
-        s += `*${u.username}:*\n`;
-        u.sessions.forEach(sess => { if (sess.isPaired) s += `  • S${sess.id} — ${maskPhone(sess.phone)}\n`; });
-        s += '\n';
-      });
-      send(chatId, s || 'No sessions');
     } else if (t.startsWith('/stopall')) {
       const parts = t.split(/\s+/);
       if (parts[1] !== SERVER_PWD) { send(chatId, '🔐 Wrong password'); return; }
@@ -1223,30 +1114,19 @@ async function initTG() {
       send(chatId, `🛑 Stopped ${cnt} sessions`);
     }
   });
-  tgBot.on('polling_error', (err) => console.error('[TG]', err.message));
 }
 
-// ============================================================
-// KEEP-ALIVE (RENDER)
-// ============================================================
 if (process.env.RENDER_EXTERNAL_URL) {
   const healthUrl = process.env.RENDER_EXTERNAL_URL + '/health';
-  setInterval(() => {
-    try { http.get(healthUrl, () => {}).on('error', () => {}); } catch (_) {}
-  }, 10 * 60 * 1000); // every 10 min
-  console.log(`🔁 Keep-alive → ${healthUrl}`);
+  setInterval(() => { try { http.get(healthUrl, () => {}).on('error', () => {}); } catch (_) {} }, 10 * 60 * 1000);
 }
 
-// ============================================================
-// START
-// ============================================================
 loadUsers();
 
 app.listen(PORT, HOST, async () => {
   console.log('\n╔═══════════════════════════════════════════╗');
   console.log('║  🟢 RK RAJA XWD — MULTI USER (Render)    ║');
   console.log('║  🌐 Port ' + String(PORT).padEnd(30, ' ') + '║');
-  console.log('║  📂 Data: ' + String(DATA_DIR).slice(-30).padEnd(30, ' ') + '║');
   console.log('╚═══════════════════════════════════════════╝\n');
   log('info', 'Server starting...');
   await initTG();
