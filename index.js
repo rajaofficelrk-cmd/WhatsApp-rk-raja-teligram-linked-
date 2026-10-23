@@ -1,5 +1,5 @@
 /**
- * RK RAJA XWD — Multi-User WhatsApp Server (Render-ready)
+ * RK RAJA XWD — Multi-User WhatsApp Server (Fully Fixed for Render)
  */
 
 const makeWASocket = require('@whiskeysockets/baileys').default;
@@ -24,7 +24,7 @@ const TG_OWNER = process.env.TELEGRAM_OWNER_ID || '';
 const SERVER_PWD = process.env.SERVER_PWD || 'rkr@ja@2025';
 const START = Date.now();
 
-// ---- PERSISTENT DATA DIR (Render: mount a Disk at /data) ----
+// Render ke liye DATA_DIR (Disk mount karna zaroori hai)
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'users_data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -165,21 +165,19 @@ function userSessions(user) {
 }
 
 // ============================================================
-// CONNECT SESSION — FIXED
+// CONNECT SESSION (FIXED PAIRING)
 // ============================================================
 async function startSession(user, sid, phone) {
   sid = String(sid);
   let s = getSess(user, sid);
   if (!s) { s = newSess(user, sid); user.sessions.set(sid, s); }
 
-  // Cleanup previous socket
   if (s.sock) {
     try { s.sock.ev.removeAllListeners(); s.sock.end(undefined); } catch (_) {}
     s.sock = null;
   }
   if (s.reconnectTimer) { clearTimeout(s.reconnectTimer); s.reconnectTimer = null; }
 
-  // Detect existing creds
   const cf = path.join(s.authDir, 'creds.json');
   let registered = false;
   try {
@@ -210,13 +208,12 @@ async function startSession(user, sid, phone) {
       auth: state,
       printQRInTerminal: false,
       logger: pino({ level: 'silent' }),
-      browser: Browsers.ubuntu('Chrome'),   // use preset — better compat
+      browser: Browsers.ubuntu('Chrome'),
       mobile: false,
       syncFullHistory: false,
       markOnlineOnConnect: true,
       generateHighQualityLinkPreview: false,
       getMessage: async () => ({ conversation: '' }),
-      // Fix for "Connection Closed" loops on some hosts
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
       keepAliveIntervalMs: 25000,
@@ -225,7 +222,7 @@ async function startSession(user, sid, phone) {
 
     s.sock.ev.on('creds.update', saveCreds);
 
-    // ---- REQUEST PAIRING CODE — RIGHT AFTER SOCKET CREATION ----
+    // 🔥 FAST PAIRING CODE
     if (!state.creds.registered && phone && !s.pairingRequested) {
       s.pairingRequested = true;
       const cleanPhone = String(phone).replace(/\D/g, '');
@@ -243,13 +240,11 @@ async function startSession(user, sid, phone) {
           s.pairingCode = null;
           s.lastError = 'Pair failed: ' + e.message;
           log('err', `[${user.username}/S${sid}] Pair error: ${e.message}`);
-          // Allow retry if failed fast
           s.pairingRequested = false;
         }
       }, 3500);
     }
 
-    // Groups
     s.sock.ev.on('groups.upsert', (gs) => gs.forEach(g => {
       s.groups[g.id] = { id: g.id, name: g.subject || '', size: g.participants ? g.participants.length : 0 };
     }));
@@ -258,7 +253,6 @@ async function startSession(user, sid, phone) {
       else if (u.id && u.subject) s.groups[u.id] = { id: u.id, name: u.subject, size: 0 };
     }));
 
-    // ---- CONNECTION UPDATE ----
     s.sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect } = update;
 
@@ -294,7 +288,6 @@ async function startSession(user, sid, phone) {
         s.isPaired = false;
         s.isConnecting = false;
 
-        // Fully logged out / banned
         if (code === DisconnectReason.loggedOut || code === 401) {
           s.suspended = true; s.lastError = 'Logged out';
           if (s.bulk && s.bulk.running) s.bulk.stopFlag = true;
@@ -308,7 +301,7 @@ async function startSession(user, sid, phone) {
           return;
         }
 
-        // 515 = restartRequired — MOST COMMON AFTER PAIRING. Reconnect FAST.
+        // 🔥 515 Fix (Reconnect after pairing)
         if (code === 515 || code === DisconnectReason.restartRequired) {
           log('info', `[${user.username}/S${sid}] restartRequired → reconnecting`);
           s.reconnectTimer = setTimeout(() => {
@@ -318,7 +311,6 @@ async function startSession(user, sid, phone) {
           return;
         }
 
-        // Otherwise, reconnect with backoff
         if (!s.intentionalClose && s.phone && !s.suspended) {
           s.reconnectAttempts++;
           if (s.reconnectAttempts > 25) { s.suspended = true; s.lastError = 'Too many reconnects'; return; }
@@ -442,23 +434,551 @@ function parseNums(raw) {
   return out;
 }
 
-// (HTML block unchanged — paste your existing HTML here,
-//  no changes needed. Only the JS backend changed.)
+// ============================================================
+// HTML FRONTEND (Original UI Restored)
+// ============================================================
+const HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RK RAJA XWD</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Share Tech Mono',monospace;background:#000;color:#00ff41;min-height:100vh;padding:14px;position:relative}
+body::before{content:"";position:fixed;inset:0;z-index:-2;background:url('${LOGO}') center top/cover no-repeat;filter:blur(3px) brightness(.4) hue-rotate(90deg) saturate(1.4)}
+body::after{content:"";position:fixed;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(0,0,0,.78),rgba(0,0,0,.95));pointer-events:none}
+.hide{display:none!important}
+.c{max-width:900px;margin:0 auto;position:relative;z-index:1}
+.hero{text-align:center;padding:10px 0}
+.hero img{max-width:140px;width:42vw;border-radius:12px;filter:drop-shadow(0 0 30px #00ff41);position:relative;z-index:2}
+h1{font-size:28px;color:#00ff41;text-shadow:0 0 15px #00ff41;letter-spacing:4px;text-align:center;margin:12px 0 4px;text-transform:uppercase;font-weight:900}
+h1 span{color:#fff}
+.sub{text-align:center;color:#009922;font-size:11px;letter-spacing:4px;margin-bottom:14px;text-transform:uppercase}
+.term{background:rgba(0,0,0,.9);border:1px solid rgba(0,255,65,.5);border-radius:8px;overflow:hidden;margin-bottom:14px;box-shadow:0 0 30px rgba(0,255,65,.3)}
+.tbar{background:#001500;padding:8px 12px;display:flex;gap:8px;align-items:center;border-bottom:1px solid rgba(0,255,65,.3)}
+.dot{width:11px;height:11px;border-radius:50%}
+.dr{background:#ff5f56}.dy{background:#ffbd2e}.dg{background:#27c93f}
+.ttitle{margin-left:8px;color:#00ff41;font-size:11px}
+.tbody{padding:12px 14px;font-size:12px;line-height:1.8}
+.ok{color:#00ff41;text-shadow:0 0 8px #00ff41}
+.cur{background:#00ff41;display:inline-block;width:9px;height:14px;vertical-align:middle;animation:bl 1s infinite}
+@keyframes bl{0%,50%{opacity:1}51%,100%{opacity:0}}
+.card{background:rgba(0,15,0,.85);border:1px solid rgba(0,255,65,.35);border-radius:8px;padding:16px;margin-bottom:12px}
+.card h2{font-size:13px;color:#00ff41;letter-spacing:2px;margin-bottom:12px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+.card h2::before{content:"";width:8px;height:8px;border-radius:50%;background:#00ff41;box-shadow:0 0 12px #00ff41;animation:bl 1.5s infinite}
+label{display:block;font-size:11px;color:#009922;margin-bottom:5px;letter-spacing:1.5px;text-transform:uppercase}
+input,textarea{width:100%;background:rgba(0,20,5,.9);border:1px solid rgba(0,255,65,.4);border-radius:6px;padding:12px;color:#00ff41;font-size:16px;font-family:inherit;outline:none}
+input:focus,textarea:focus{border-color:#00ff41;box-shadow:0 0 15px rgba(0,255,65,.4)}
+input::placeholder,textarea::placeholder{color:#005518}
+textarea{resize:vertical;min-height:70px}
+.field{margin-bottom:11px}
+.btn{background:linear-gradient(180deg,#00ff41,#00aa2a);color:#000;border:none;border-radius:6px;padding:14px 20px;font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;margin-top:6px;width:100%;font-family:inherit;display:block}
+.btn:disabled{background:#0a1a0a;color:#005518;cursor:not-allowed}
+.btn-ghost{background:transparent;border:1px solid rgba(0,255,65,.5);color:#00ff41}
+.btn-danger{background:linear-gradient(180deg,#ff003c,#aa0022);color:#fff}
+.btn-row{display:flex;gap:8px}.btn-row .btn{margin-top:0}
+.msg{margin-top:10px;padding:10px;border-radius:6px;font-size:12px;display:none}
+.msg.ok{background:rgba(0,255,65,.12);color:#00ff41;border:1px solid rgba(0,255,65,.5);display:block}
+.msg.err{background:rgba(255,0,60,.12);color:#ff5f7f;border:1px solid rgba(255,0,60,.5);display:block}
+.code{background:rgba(0,20,5,.9);border:2px dashed #00ff41;border-radius:8px;padding:18px;margin:12px 0;text-align:center;animation:cp 1.5s infinite}
+@keyframes cp{0%,100%{box-shadow:0 0 20px rgba(0,255,65,.4)}50%{box-shadow:0 0 40px rgba(0,255,65,.8)}}
+.codev{font-size:34px;font-weight:900;letter-spacing:8px;color:#00ff41;font-family:'Courier New',monospace;text-shadow:0 0 25px #00ff41}
+.codel{font-size:11px;color:#009922;letter-spacing:3px;margin-bottom:8px;text-transform:uppercase}
+.steps{background:rgba(0,15,0,.6);border:1px solid rgba(0,255,65,.25);border-radius:6px;padding:11px;font-size:12px;line-height:1.8;color:#009922;margin-top:10px}
+.steps b{color:#00ff41}
+.stat{background:rgba(0,15,0,.75);border:1px solid rgba(0,255,65,.25);border-radius:8px;padding:12px;text-align:center}
+.stat .k{font-size:10px;color:#009922;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px}
+.stat .v{font-size:18px;font-weight:900;color:#00ff41}
+.sgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.log{background:#000;border:1px solid rgba(0,255,65,.3);border-radius:8px;padding:12px;height:250px;overflow-y:auto;font-size:12px;line-height:1.7}
+.log .line{color:#009922;border-bottom:1px dashed rgba(0,255,65,.08);padding:2px 0;word-break:break-all}
+.log .t{color:#00ff41;margin-right:6px}
+.log .ok{color:#00ff41}.log .err{color:#ff5f7f}.log .info{color:#00aaff}.log .warn{color:#ffcc00}
+.groups-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.groups-toolbar .btn{width:auto;padding:9px 14px;font-size:11px;margin:0}
+.groups-toolbar .count{font-size:11px;color:#009922;margin-left:auto}
+.glist{background:rgba(0,15,0,.6);border:1px solid rgba(0,255,65,.25);border-radius:8px;max-height:280px;overflow-y:auto;padding:8px}
+.gitem{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+.gitem.selected{background:rgba(0,255,65,.15);border-color:#00ff41}
+.gitem input[type=checkbox]{width:18px;height:18px;accent-color:#00ff41;flex-shrink:0}
+.ginfo{flex:1;min-width:0}
+.gname{color:#00ff41;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gjid{color:#006622;font-size:11px;font-family:monospace;margin-top:2px}
+.hint{font-size:11px;color:#006622;margin-top:5px}
+.empty{padding:22px;text-align:center;color:#005518;font-size:12px}
+.session{padding:13px;background:rgba(0,15,0,.75);border:1px solid rgba(0,255,65,.3);border-radius:8px;margin-bottom:9px}
+.session.active{border-color:#00ff41;background:rgba(0,255,65,.08)}
+.session.susp{border-color:#ff003c;background:rgba(255,0,60,.1)}
+.shead{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.sname{color:#00ff41;font-size:14px;font-weight:700}
+.sstatus{color:#009922;font-size:11px;margin-top:2px}
+.sactions{display:flex;gap:6px;flex-wrap:wrap}
+.sactions .btn{width:auto;padding:7px 11px;font-size:10px;margin:0}
+.foot{text-align:center;color:#005518;font-size:11px;letter-spacing:3px;margin-top:22px;text-transform:uppercase;line-height:1.8}
+.tabs{display:flex;gap:8px;margin-bottom:14px}
+.tabs .btn{flex:1;padding:14px;font-size:14px;margin:0}
+.tabs .active{background:linear-gradient(180deg,#00ff41,#00aa2a);color:#000}
+.tabs .inactive{background:rgba(0,20,5,.9);border:1px solid rgba(0,255,65,.5);color:#00ff41}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:rgba(0,20,5,.9);border:1px solid rgba(0,255,65,.4);border-radius:6px;margin-bottom:14px;font-size:12px}
+.topbar b{color:#00ff41}
+.topbar .btn{width:auto;padding:6px 12px;font-size:10px;margin:0}
+</style>
+</head>
+<body>
 
-const HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
-<title>RK RAJA XWD</title></head><body>
-<h1 style="color:#00ff41;font-family:monospace;text-align:center;padding:40px">
-RK RAJA XWD — Running. Open main HTML.
-</h1></body></html>`;
+<!-- AUTH SCREEN -->
+<div id="authScreen" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.96);display:flex;align-items:center;justify-content:center;padding:18px;overflow-y:auto">
+  <div style="max-width:400px;width:100%;background:rgba(0,15,0,.98);border:1px solid rgba(0,255,65,.5);border-radius:12px;padding:26px 22px;margin:auto">
+    <h2 style="color:#00ff41;text-align:center;font-size:22px;letter-spacing:3px;margin-bottom:4px;text-transform:uppercase">RK RAJA XWD</h2>
+    <div style="text-align:center;color:#009922;font-size:11px;letter-spacing:2px;margin-bottom:20px">WHATSAPP SERVER</div>
+
+    <div class="tabs">
+      <button type="button" id="tabLogin" class="btn active" onclick="showTab('login')">LOGIN</button>
+      <button type="button" id="tabSignup" class="btn inactive" onclick="showTab('signup')">SIGN UP</button>
+    </div>
+
+    <div id="loginBox">
+      <div class="field"><label>Username</label><input id="loginUser" type="text" placeholder="username"/></div>
+      <div class="field"><label>Password</label><input id="loginPass" type="password" placeholder="password"/></div>
+      <button type="button" class="btn" onclick="doLogin()">LOGIN</button>
+    </div>
+
+    <div id="signupBox" class="hide">
+      <div class="field"><label>Username (min 3)</label><input id="signupUser" type="text" placeholder="choose username"/></div>
+      <div class="field"><label>Password (min 4)</label><input id="signupPass" type="password" placeholder="choose password"/></div>
+      <div class="field"><label>Confirm Password</label><input id="signupPass2" type="password" placeholder="confirm"/></div>
+      <button type="button" class="btn" onclick="doSignup()">CREATE ACCOUNT</button>
+    </div>
+
+    <div id="authMsg" class="msg"></div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div class="c hide" id="app">
+  <div class="topbar">
+    <div>👤 <b id="topUser">—</b></div>
+    <button type="button" class="btn btn-ghost" onclick="doLogout()">LOGOUT</button>
+  </div>
+
+  <div class="hero"><img src="${LOGO}" onerror="this.style.display='none'"/></div>
+  <h1>RK RAJA <span>XWD</span></h1>
+  <div class="sub">WHATSAPP SERVER</div>
+
+  <div class="term">
+    <div class="tbar"><span class="dot dr"></span><span class="dot dy"></span><span class="dot dg"></span><span class="ttitle">root@rk-raja — whatsapp-server</span></div>
+    <div class="tbody">
+      <div><span style="color:#00ff41">root@rk-raja:~#</span> <span style="color:#fff">whatsapp-server</span></div>
+      <div><span class="ok">[+]</span> Checking environment ... <span class="ok">OK</span></div>
+      <div><span class="ok">[+]</span> Connecting to WhatsApp ... <span class="ok">OK</span></div>
+      <div><span class="ok">[+]</span> Server is running ...</div>
+      <div><span style="color:#00ff41">root@rk-raja:~#</span> <span class="cur"></span></div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button type="button" id="tabDash" class="btn active" onclick="switchTab('dash')">DASHBOARD</button>
+    <button type="button" id="tabBulk" class="btn inactive" onclick="switchTab('bulk')">BULK SENDER</button>
+  </div>
+
+  <div id="panel-dash">
+    <div class="card">
+      <h2>Add WhatsApp Number</h2>
+      <div class="field">
+        <label>Session ID (1, 2, 3, 4...)</label>
+        <input id="sid" type="text" value="1"/>
+        <div class="hint">Har number ke liye alag ID (unique per user)</div>
+      </div>
+      <div class="field">
+        <label>Phone (country code, no + or spaces)</label>
+        <input id="phone" type="tel" placeholder="919876543210"/>
+      </div>
+      <button type="button" id="pairBtn" class="btn" onclick="startPair()">GET PAIRING CODE</button>
+      <div id="pairMsg" class="msg"></div>
+      <div id="codeSec" class="hide">
+        <div class="code">
+          <div class="codel">🔑 Pairing Code — Session <span id="codeSid">1</span></div>
+          <div class="codev" id="codeVal">--------</div>
+        </div>
+        <div class="steps"><b>Steps:</b><br/>1. WhatsApp kholo us number me<br/>2. Settings → <b>Linked Devices</b><br/>3. <b>Link a Device</b> → <b>Link with phone number</b><br/>4. Code daalo (2 min me)</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Your Numbers</h2>
+      <div id="sessList"><div class="empty">No sessions yet.</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Stats</h2>
+      <div class="sgrid">
+        <div class="stat"><div class="k">Sessions</div><div class="v" id="stSess">0</div></div>
+        <div class="stat"><div class="k">Paired</div><div class="v" id="stPaired">0</div></div>
+        <div class="stat"><div class="k">Uptime</div><div class="v" id="stUp" style="font-size:14px">00:00:00</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Your Log</h2>
+      <div class="log" id="logBox"><div class="line"><span class="t">[boot]</span>Ready</div></div>
+      <div class="btn-row" style="margin-top:10px"><button type="button" class="btn btn-ghost" onclick="clearLog()">CLEAR</button></div>
+    </div>
+  </div>
+
+  <div id="panel-bulk" class="hide">
+    <div class="card">
+      <h2>Messages File (.txt)</h2>
+      <input id="fileInput" type="file" accept=".txt"/>
+      <div class="hint" id="fileHint">No file</div>
+    </div>
+    <div class="card">
+      <h2>Groups</h2>
+      <div class="groups-toolbar">
+        <button type="button" class="btn btn-ghost" onclick="fetchGroups()">FETCH</button>
+        <button type="button" class="btn btn-ghost" onclick="selAll()">ALL</button>
+        <button type="button" class="btn btn-ghost" onclick="clearSel()">CLEAR</button>
+        <span class="count" id="gcount">0 selected</span>
+      </div>
+      <div class="glist" id="glist"><div class="empty">Click FETCH</div></div>
+    </div>
+    <div class="card">
+      <h2>Numbers (optional)</h2>
+      <textarea id="nums" placeholder="919876543210&#10;918765432109"></textarea>
+    </div>
+    <div class="card">
+      <h2>Settings</h2>
+      <div class="field"><label>Hater Prefix</label><input id="hater" type="text" placeholder="RK RAJA XWD"/></div>
+      <div class="field"><label>Delay (seconds, min 3)</label><input id="delay" type="number" min="3" value="10"/></div>
+      <div class="field"><label>Hater Suffix</label><input id="lastHater" type="text" placeholder="XWD"/></div>
+      <div class="btn-row">
+        <button type="button" id="startBtn" class="btn" onclick="startBulk()">▶ START BULK</button>
+        <button type="button" id="stopAllBtn" class="btn btn-danger" onclick="stopAll()" disabled>■ STOP ALL</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Live Stats</h2>
+      <div id="multiStats"><div class="empty">Start bulk to see stats</div></div>
+    </div>
+  </div>
+
+  <div class="foot">── 👑 RK RAJA 👑 ──<br/>● SERVER ONLINE</div>
+</div>
+
+<script>
+var token = localStorage.getItem('rk_token') || '';
+var curUser = localStorage.getItem('rk_user') || '';
+var allSess = [];
+var selGroups = new Set();
+var cgroups = [];
+var lastLogId = 0;
+var codePoller = null;
+
+function esc(s) { return String(s).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function showMsg(el, t, x) { el.textContent = x; el.style.display = t ? 'block' : 'none'; el.className = 'msg' + (t ? ' ' + t : ''); }
+function clearLog() { document.getElementById('logBox').innerHTML = ''; }
+function authHeaders(x) { var h = Object.assign({}, x || {}); h['X-User-Token'] = token; return h; }
+
+function showTab(which) {
+  var l = document.getElementById('loginBox');
+  var s = document.getElementById('signupBox');
+  var tl = document.getElementById('tabLogin');
+  var ts = document.getElementById('tabSignup');
+  document.getElementById('authMsg').style.display = 'none';
+  if (which === 'login') {
+    l.classList.remove('hide'); s.classList.add('hide');
+    tl.className = 'btn active'; ts.className = 'btn inactive';
+  } else {
+    l.classList.add('hide'); s.classList.remove('hide');
+    tl.className = 'btn inactive'; ts.className = 'btn active';
+  }
+}
+
+function switchTab(n) {
+  document.getElementById('panel-dash').classList.toggle('hide', n !== 'dash');
+  document.getElementById('panel-bulk').classList.toggle('hide', n !== 'bulk');
+  document.getElementById('tabDash').className = 'btn ' + (n === 'dash' ? 'active' : 'inactive');
+  document.getElementById('tabBulk').className = 'btn ' + (n === 'bulk' ? 'active' : 'inactive');
+}
+
+async function doLogin() {
+  var u = document.getElementById('loginUser').value.trim();
+  var p = document.getElementById('loginPass').value;
+  var m = document.getElementById('authMsg');
+  if (!u || !p) { showMsg(m, 'err', 'Both fields required'); return; }
+  showMsg(m, 'ok', 'Logging in...');
+  try {
+    var r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    token = d.token; curUser = d.username;
+    localStorage.setItem('rk_token', token);
+    localStorage.setItem('rk_user', curUser);
+    showApp();
+  } catch (e) { showMsg(m, 'err', e.message); }
+}
+
+async function doSignup() {
+  var u = document.getElementById('signupUser').value.trim();
+  var p = document.getElementById('signupPass').value;
+  var p2 = document.getElementById('signupPass2').value;
+  var m = document.getElementById('authMsg');
+  if (!u || u.length < 3) { showMsg(m, 'err', 'Username min 3 chars'); return; }
+  if (!p || p.length < 4) { showMsg(m, 'err', 'Password min 4 chars'); return; }
+  if (p !== p2) { showMsg(m, 'err', 'Passwords do not match'); return; }
+  showMsg(m, 'ok', 'Creating account...');
+  try {
+    var r = await fetch('/api/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    token = d.token; curUser = d.username;
+    localStorage.setItem('rk_token', token);
+    localStorage.setItem('rk_user', curUser);
+    showApp();
+  } catch (e) { showMsg(m, 'err', e.message); }
+}
+
+function doLogout() {
+  if (!confirm('Logout?')) return;
+  localStorage.removeItem('rk_token');
+  localStorage.removeItem('rk_user');
+  location.reload();
+}
+
+async function checkAuth() {
+  if (!token) return;
+  try {
+    var r = await fetch('/api/me', { headers: authHeaders() });
+    var d = await r.json();
+    if (d.success) { curUser = d.username; showApp(); }
+    else { localStorage.removeItem('rk_token'); localStorage.removeItem('rk_user'); }
+  } catch (_) {}
+}
+
+function showApp() {
+  document.getElementById('authScreen').classList.add('hide');
+  document.getElementById('app').classList.remove('hide');
+  document.getElementById('topUser').textContent = curUser;
+  refresh(); pollStats();
+}
+
+async function startPair() {
+  var phone = document.getElementById('phone').value.trim();
+  var sid = document.getElementById('sid').value.trim() || '1';
+  var btn = document.getElementById('pairBtn');
+  var msg = document.getElementById('pairMsg');
+  if (!phone || !/^\d{10,15}$/.test(phone)) { showMsg(msg, 'err', 'Valid number daalo'); return; }
+  btn.disabled = true; btn.textContent = 'SENDING...'; showMsg(msg, '', '');
+  document.getElementById('codeSec').classList.remove('hide');
+  document.getElementById('codeSid').textContent = sid;
+  document.getElementById('codeVal').textContent = 'Wait...';
+  try {
+    var r = await fetch('/api/pair', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ phone: phone, sessionId: sid }) });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    showMsg(msg, 'ok', '⏳ Generating code...');
+    if (codePoller) clearInterval(codePoller);
+    var tries = 0;
+    codePoller = setInterval(async function() {
+      tries++;
+      if (tries > 30) { clearInterval(codePoller); codePoller = null; document.getElementById('codeVal').textContent = 'TIMEOUT'; return; }
+      try {
+        var rr = await fetch('/api/sessions', { headers: authHeaders() });
+        var dd = await rr.json();
+        var s = (dd.sessions || []).find(function(x) { return x.id === sid; });
+        if (s && s.code) { document.getElementById('codeVal').textContent = s.code; showMsg(msg, 'ok', '✅ Ready! WhatsApp me daalo'); clearInterval(codePoller); codePoller = null; }
+        else if (s && s.paired) { document.getElementById('codeVal').textContent = 'PAIRED'; showMsg(msg, 'ok', '✅ Paired!'); clearInterval(codePoller); codePoller = null; setTimeout(refresh, 800); }
+        else if (s && s.error) { document.getElementById('codeVal').textContent = 'ERROR'; showMsg(msg, 'err', s.error); clearInterval(codePoller); codePoller = null; }
+      } catch (_) {}
+    }, 1000);
+  } catch (e) { showMsg(msg, 'err', e.message); document.getElementById('codeVal').textContent = 'ERR'; }
+  finally { btn.disabled = false; btn.textContent = 'GET PAIRING CODE'; }
+}
+
+async function refresh() {
+  if (!token) return;
+  try {
+    var r = await fetch('/api/sessions', { headers: authHeaders() });
+    var d = await r.json();
+    if (!d.success) return;
+    allSess = d.sessions || [];
+    renderSess();
+    document.getElementById('stSess').textContent = allSess.length;
+    document.getElementById('stPaired').textContent = allSess.filter(function(s){ return s.paired; }).length;
+  } catch (_) {}
+}
+
+function renderSess() {
+  var el = document.getElementById('sessList');
+  if (!allSess.length) { el.innerHTML = '<div class="empty">No sessions yet.</div>'; return; }
+  el.innerHTML = allSess.map(function(s) {
+    var cls = 'session';
+    if (s.paired && !s.suspended) cls += ' active';
+    if (s.suspended) cls += ' susp';
+    var badge = s.suspended ? '🚫 SUSPENDED' : (s.paired ? '✅ Paired' : (s.connecting ? '⏳ Connecting' : (s.code ? '🔑 Code: ' + esc(s.code) : (s.registered ? '⚠ Registered' : '❌ Idle'))));
+    var g = s.paired ? (s.groupCount + ' groups') : '';
+    var bulkHtml = '';
+    if (s.bulkRunning && s.bulkStartedAt) {
+      var bs = Math.floor((Date.now() - s.bulkStartedAt) / 1000);
+      var bt = String(Math.floor(bs/3600)).padStart(2,'0') + ':' + String(Math.floor((bs%3600)/60)).padStart(2,'0') + ':' + String(bs%60).padStart(2,'0');
+      bulkHtml = '<div style="padding:8px 10px;background:rgba(0,255,65,.1);border:1px solid rgba(0,255,65,.4);border-radius:6px;font-size:11px;margin-top:8px"><div style="color:#00ff41;font-weight:700">🔄 BULK — ' + bt + '</div><div style="color:#009922">📤 ' + s.bulkSent + ' | ❌ ' + s.bulkFailed + ' | 🔁 ' + s.bulkCycle + '</div></div>';
+    }
+    return '<div class="' + cls + '"><div class="shead"><div><div class="sname">Session ' + esc(s.id) + '</div><div class="sstatus">' + badge + (g ? ' | ' + g : '') + '</div></div><div class="sactions">' +
+      (s.paired || s.registered ? '<button type="button" class="btn btn-ghost" onclick="doLogoutSess(\'' + esc(s.id) + '\')">LOGOUT</button>' : '') +
+      (s.bulkRunning ? '<button type="button" class="btn btn-danger" onclick="stopSess(\'' + esc(s.id) + '\')">STOP</button>' : '') +
+    '</div></div>' + bulkHtml + '</div>';
+  }).join('');
+}
+
+async function doLogoutSess(sid) {
+  if (!confirm('Logout S' + sid + '?')) return;
+  try {
+    var r = await fetch('/api/logout', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ sessionId: sid }) });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    refresh();
+  } catch (e) { alert(e.message); }
+}
+
+async function stopSess(sid) {
+  try {
+    var r = await fetch('/api/bulk/stop', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ sessionId: sid }) });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    if (d.summary) alert('🛑 Stopped!\nRun: ' + d.summary.runFormatted + '\nSent: ' + d.summary.sent);
+    setTimeout(refresh, 1000);
+  } catch (e) { alert(e.message); }
+}
+
+async function fetchGroups() {
+  var p = allSess.filter(function(s){ return s.paired && !s.suspended; });
+  if (!p.length) { alert('Pehle WhatsApp pair karo'); return; }
+  var el = document.getElementById('glist');
+  el.innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    var r = await fetch('/api/groups?sessionId=' + p[0].id, { headers: authHeaders() });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    cgroups = d.groups || [];
+    renderGroups();
+  } catch (e) { el.innerHTML = '<div class="empty" style="color:#ff5f7f">' + esc(e.message) + '</div>'; }
+}
+
+function renderGroups() {
+  var el = document.getElementById('glist');
+  document.getElementById('gcount').textContent = selGroups.size + ' selected';
+  if (!cgroups.length) { el.innerHTML = '<div class="empty">No groups</div>'; return; }
+  el.innerHTML = cgroups.map(function(g) {
+    var sel = selGroups.has(g.id) ? ' selected' : '';
+    var chk = selGroups.has(g.id) ? ' checked' : '';
+    return '<label class="gitem' + sel + '" data-jid="' + esc(g.id) + '"><input type="checkbox"' + chk + ' onchange="toggleG(\'' + esc(g.id) + '\',this.checked)"/><div class="ginfo"><div class="gname">' + esc(g.name || '(no name)') + '</div><div class="gjid">' + esc(g.id) + '</div></div></label>';
+  }).join('');
+}
+function toggleG(jid, c) {
+  if (c) selGroups.add(jid); else selGroups.delete(jid);
+  document.getElementById('gcount').textContent = selGroups.size + ' selected';
+  document.querySelectorAll('#glist .gitem').forEach(function(el) { if (el.dataset.jid === jid) el.classList.toggle('selected', c); });
+}
+function selAll() { cgroups.forEach(function(g){ selGroups.add(g.id); }); renderGroups(); }
+function clearSel() { selGroups.clear(); renderGroups(); }
+
+document.getElementById('fileInput').addEventListener('change', function(e) {
+  var f = e.target.files[0];
+  document.getElementById('fileHint').textContent = f ? f.name : 'No file';
+});
+
+async function startBulk() {
+  var p = allSess.filter(function(s){ return s.paired && !s.suspended; });
+  if (!p.length) { alert('Pehle WhatsApp pair karo'); return; }
+  var file = document.getElementById('fileInput').files[0];
+  if (!file) { alert('Message file upload karo'); return; }
+  var nr = document.getElementById('nums').value.trim();
+  if (!selGroups.size && !nr) { alert('Group select karo ya number daalo'); return; }
+  var delay = parseInt(document.getElementById('delay').value) || 10;
+  if (delay < 3) delay = 3;
+  var sb = document.getElementById('startBtn');
+  var stb = document.getElementById('stopAllBtn');
+  sb.disabled = true; sb.textContent = 'Starting...';
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('groupIds', JSON.stringify(Array.from(selGroups)));
+  fd.append('numbers', nr);
+  fd.append('hater', document.getElementById('hater').value.trim());
+  fd.append('lastHater', document.getElementById('lastHater').value.trim());
+  fd.append('delay', String(delay));
+  try {
+    var r = await fetch('/api/bulk/start-all', { method: 'POST', headers: authHeaders(), body: fd });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    alert('✅ Bulk started on ' + d.sessions + ' sessions');
+    stb.disabled = false;
+    setTimeout(refresh, 1000);
+  } catch (e) { alert('❌ ' + e.message); }
+  finally { sb.disabled = false; sb.textContent = '▶ START BULK'; }
+}
+
+async function stopAll() {
+  if (!confirm('Stop ALL?')) return;
+  try {
+    var r = await fetch('/api/bulk/stop-all', { method: 'POST', headers: authHeaders() });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    alert('Stopped ' + d.stopped);
+    document.getElementById('stopAllBtn').disabled = true;
+    setTimeout(refresh, 1000);
+  } catch (e) { alert(e.message); }
+}
+
+async function pollStats() {
+  if (!token) return;
+  try {
+    var r = await fetch('/api/status', { headers: authHeaders() });
+    var d = await r.json();
+    if (!d.success) return;
+    document.getElementById('stUp').textContent = d.uptimeFormatted || '00:00:00';
+    var sw = (d.sessions || []).filter(function(s){ return s.bulk && (s.bulk.running || s.bulk.sent > 0); });
+    var el = document.getElementById('multiStats');
+    if (!sw.length) { el.innerHTML = '<div class="empty">Start bulk to see stats</div>'; }
+    else {
+      el.innerHTML = sw.map(function(s) {
+        var b = s.bulk || {};
+        var pct = (b.total && b.total > 0) ? Math.round(((b.total - (b.remaining || 0)) / b.total) * 100) : 0;
+        return '<div style="padding:10px;background:rgba(0,15,0,.75);border:1px solid rgba(0,255,65,.3);border-radius:6px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><b style="color:#00ff41">S' + esc(s.id) + '</b><span style="color:' + (b.running ? '#00ff41' : '#005518') + '">' + (b.running ? '● Running' : '● Stopped') + '</span></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:11px"><div>Sent: <b style="color:#00ff41">' + (b.sent || 0) + '</b></div><div>Failed: <b style="color:#ff5f7f">' + (b.failed || 0) + '</b></div><div>Cycle: <b>' + (b.cycle || 0) + '</b></div><div>Prog: <b>' + pct + '%</b></div></div></div>';
+      }).join('');
+    }
+    if (d.logs && d.logs.length) {
+      var box = document.getElementById('logBox');
+      d.logs.forEach(function(l) {
+        if (l.id > lastLogId) {
+          var div = document.createElement('div');
+          div.className = 'line ' + (l.type || 'info');
+          div.innerHTML = '<span class="t">[' + new Date(l.ts).toLocaleTimeString() + ']</span>' + esc(l.msg);
+          box.appendChild(div);
+        }
+      });
+      lastLogId = d.logs[d.logs.length - 1].id;
+      box.scrollTop = box.scrollHeight;
+      while (box.children.length > 500) box.removeChild(box.firstChild);
+    }
+  } catch (_) {}
+}
+
+setInterval(function(){ if (token) { refresh(); } }, 3000);
+setInterval(function(){ if (token) { pollStats(); } }, 1500);
+checkAuth();
+</script>
+</body>
+</html>`;
 
 // ============================================================
-// EXPRESS
+// EXPRESS ROUTES
 // ============================================================
 const app = express();
 app.use(express.json());
 app.get('/', (req, res) => res.type('html').send(HTML));
 
-// ⚡ FAST HEALTH CHECK for Render + self-ping
+// ⚡ HEALTH CHECK (Render ping ke liye)
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime(), users: users.size }));
 
 const upload = multer({ dest: 'uploads/' });
@@ -707,7 +1227,7 @@ async function initTG() {
 }
 
 // ============================================================
-// KEEP-ALIVE (prevents Render free-tier sleep)
+// KEEP-ALIVE (RENDER)
 // ============================================================
 if (process.env.RENDER_EXTERNAL_URL) {
   const healthUrl = process.env.RENDER_EXTERNAL_URL + '/health';
